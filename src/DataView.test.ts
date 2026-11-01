@@ -18,6 +18,17 @@ beforeEach(async () => {
 });
 afterEach(() => { app.unmount(); host.remove(); vi.useRealTimers(); });
 
+test('data tasks use a full-width workspace and keep import available from the first screen', async () => {
+  const main = host.querySelector('main.data-view')!;
+  expect(main.querySelector('.data-tabs [aria-current="page"]')?.textContent).toBe('导入');
+  expect(main.querySelector('[aria-label="导入词条"]')).not.toBeNull();
+  expect(button('选择文件')).not.toBeNull();
+  button('备份与恢复').click(); await settle();
+  expect(main.querySelector('.data-tabs [aria-current="page"]')?.textContent).toBe('备份与恢复');
+  button('导入').click(); await settle();
+  expect(main.querySelector('.data-tabs [aria-current="page"]')?.textContent).toBe('导入');
+});
+
 test('preview errors require explicit valid-only confirmation and are shown before commit', async () => {
   mocks.invoke.mockImplementation(async (command, args) => {
     if (command === 'exchange_file') return '/source.json';
@@ -40,11 +51,24 @@ test('cached data view keeps preview when navigating back to the library', async
   const visible = ref(true);
   app = createApp(defineComponent({ setup: () => () => h(KeepAlive, {}, { default: () => visible.value ? h(DataView, { onBack: () => { visible.value = false; } }) : null }) }));
   app.mount(host); await settle();
-  const field = [...host.querySelectorAll<HTMLInputElement>('input')].find(input => input.parentElement?.textContent?.includes('文件（也可拖入）'))!;
+  const field = [...host.querySelectorAll<HTMLInputElement>('input')].find(input => input.parentElement?.textContent?.includes('文件路径（也可拖入）'))!;
   field.value = '/keep-me.csv'; field.dispatchEvent(new Event('input', { bubbles: true })); await settle();
-  button('返回词库').click(); await settle();
+  button('← 返回词库').click(); await settle();
   visible.value = true; await settle();
   expect([...host.querySelectorAll<HTMLInputElement>('input')].some(input => input.value === '/keep-me.csv')).toBe(true);
+});
+
+test('single-sheet Excel previews ten columns without mapping', async () => {
+  mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === 'exchange_file') return '/words.xlsx';
+    if (command === 'exchange') return { job_id: args.request.operation };
+    if (command === 'exchange_status') return { state: 'completed', result: args.id === 'inspect_excel' ? { sheets:['词条'], sheet:'词条', columns:['词条标识','写法','假名','释义','词性','音调','JLPT','日文例句','例句中文翻译','备注'], samples:[['cat','猫','ねこ','猫']] } : args.id === 'preview' ? { task_id:'task', valid:1, errors:0,total:1, columns:[] } : [] };
+  });
+  button('选择文件').click(); await settle();
+  button('查看样本').click(); await settle();
+  expect(host.textContent).toContain('ねこ');
+  button('全量校验并预览').click(); await settle();
+  expect(mocks.invoke).toHaveBeenCalledWith('exchange', { request: { operation:'preview', path:'/words.xlsx', options:{ source_namespace:'nyako:excel:local',excel:{sheet:null,headers:true,columns:{},pos_mapping:{}} } } });
 });
 
 test('explicit selection exports ids without a library scope', async () => {
@@ -57,7 +81,7 @@ test('explicit selection exports ids without a library scope', async () => {
     if (command === 'exchange_status') return { state: 'completed', result: { words: 2 } };
   });
   button('导出 JSON').click(); await settle();
-  expect(mocks.invoke).toHaveBeenCalledWith('exchange', { request: { operation: 'export', options: { path: '/export.json', format: 'json', library_id: null, selected: ['word-one', 'word-two'], csv_loss_confirmed: false, csv_original: false, expected: null } } });
+  expect(mocks.invoke).toHaveBeenCalledWith('exchange', { request: { operation: 'export', options: { path: '/export.json', format: 'json', library_id: null, selected: ['word-one', 'word-two'], expected: null } } });
 });
 
 test('running task blocks close and exposes cancellation independently', async () => {

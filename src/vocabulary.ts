@@ -7,14 +7,11 @@ export interface Sense { id: string; meaning: string }
 /** @description 例句与可选义项关联。 @param 不适用。 @throws 不适用。 */
 export interface Example { id: string; sense_id: string | null; jp: string; cn: string | null }
 /** @description 音调位置。 @param 不适用。 @throws 不适用。 */
-export interface Pitch { id: string; mora_count: number; downstep: number; source: string | null }
-/** @description 共享标签。 @param 不适用。 @throws 不适用。 */
-export interface Tag { id: string; name: string }
+export interface Pitch { id: string; downstep: number }
 /** @description 原子保存的词条内容。 @param 不适用。 @throws 不适用。 */
 export interface WordInput {
-  id: string; kanji: string | null; kana: string; jlpt: string | null; note: string;
-  senses: Sense[]; examples: Example[]; pitches: Pitch[]; pos: string[];
-  tag_ids: string[]; library_ids: string[];
+  id: string; kanji: string; kana: string; jlpt: string | null; note: string;
+  senses: Sense[]; examples: Example[]; pitches: Pitch[]; pos: string[]; library_ids: string[];
 }
 /** @description 词条内容与版本。 @param 不适用。 @throws 不适用。 */
 export interface WordDetail {
@@ -23,13 +20,13 @@ export interface WordDetail {
 }
 /** @description 正式列表投影。 @param 不适用。 @throws 不适用。 */
 export interface WordRow {
-  id: string; kanji: string | null; kana: string; meaning: string; sense_count: number;
-  revision: number; updated_at: number; jlpt: string | null; pos: string[]; tags: Tag[];
+  id: string; kanji: string; kana: string; meaning: string; sense_count: number;
+  revision: number; updated_at: number; jlpt: string | null; pos: string[];
   card_state: string | null; due_at: number | null; suspended: boolean; buried_until: number | null;
 }
 /** @description 正式检索条件。 @param 不适用。 @throws 不适用。 */
 export interface WordQuery {
-  text: string; library_id: string | null; unclassified: boolean; tag_ids: string[]; tags_all: boolean;
+  text: string; library_id: string | null; unclassified: boolean;
   jlpt: string | null; pos: string | null; state: string | null; due: boolean | null;
   sort: string; descending: boolean;
 }
@@ -41,11 +38,9 @@ export interface SelectedWord { id: string; revision: number }
 export interface DeleteImpact { memberships: number; cards: number; events: number }
 
 type Request =
-  | { operation: 'libraries' | 'tags' }
+  | { operation: 'libraries' }
   | { operation: 'save_library'; library: Library; expected: number | null }
   | { operation: 'delete_library'; id: string; revision: number }
-  | { operation: 'save_tag'; id: string; name: string; expected: string | null }
-  | { operation: 'delete_tag'; id: string; expected: string }
   | { operation: 'get_word'; id: string }
   | { operation: 'save_word'; content: WordInput; expected: number | null }
   | { operation: 'list_words'; query: WordQuery; cursor: string | null; limit: number }

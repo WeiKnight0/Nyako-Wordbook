@@ -72,7 +72,7 @@ export interface Diagnostics {
  * @throws 不适用。
  */
 export interface StorageStatus {
-  state: 'ready' | 'blocked';
+  state: 'initializing' | 'ready' | 'blocked';
   schema_version: number | null;
   data_directory: string;
   library_count: number | null;

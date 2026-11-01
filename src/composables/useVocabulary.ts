@@ -1,11 +1,11 @@
 import { computed, onBeforeUnmount, ref } from 'vue';
-import { errorMessage, api, type StorageStatus } from '../api';
-import { vocabulary, type Library, type Tag, type WordDetail, type WordPage, type WordQuery, type WordRow, type SelectedWord } from '../vocabulary';
+import { errorMessage, api, desktop, type StorageStatus } from '../api';
+import { demoDetail, demoLibraries, searchDemo } from '../demoVocabulary';
+import { vocabulary, type Library, type WordDetail, type WordPage, type WordQuery, type WordRow, type SelectedWord } from '../vocabulary';
 
 /** @description 管理真实词库查询与活动详情，隔离过期响应。 @param 无。 @throws 业务错误由事件入口展示。 */
 export function useVocabulary() {
   const libraries = ref<Library[]>([]);
-  const tags = ref<Tag[]>([]);
   const storage = ref<StorageStatus>();
   const error = ref('');
   const notice = ref('');
@@ -16,8 +16,9 @@ export function useVocabulary() {
   const selected = ref<SelectedWord[]>([]);
   const total = ref(0);
   const cursor = ref<string | null>(null);
-  const query = ref<WordQuery>({ text: '', library_id: null, unclassified: false, tag_ids: [], tags_all: true, jlpt: null, pos: null, state: null, due: null, sort: 'updated_at', descending: true });
-  const ready = computed(() => storage.value?.state === 'ready');
+  const query = ref<WordQuery>({ text: '', library_id: null, unclassified: false, jlpt: null, pos: null, state: null, due: null, sort: 'updated_at', descending: true });
+  const demo = import.meta.env.DEV && !desktop;
+  const ready = computed(() => demo || storage.value?.state === 'ready');
   let sequence = 0;
   let detailSequence = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -28,7 +29,7 @@ export function useVocabulary() {
     detail.value = undefined;
     const request = ++detailSequence;
     try {
-      const result = await vocabulary<WordDetail>({ operation: 'get_word', id });
+      const result = demo ? demoDetail(id) : await vocabulary<WordDetail>({ operation: 'get_word', id });
       if (request === detailSequence) detail.value = result;
     } catch (cause) { if (request === detailSequence) error.value = errorMessage(cause); }
   }
@@ -39,11 +40,13 @@ export function useVocabulary() {
     loading.value = true;
     error.value = '';
     try {
-      const page = await vocabulary<WordPage>({ operation: 'list_words', query: JSON.parse(JSON.stringify(query.value)) as WordQuery, cursor: append ? cursor.value : null, limit: 100 });
+      const page = demo
+        ? { words: searchDemo(query.value), next_cursor: null }
+        : await vocabulary<WordPage>({ operation: 'list_words', query: JSON.parse(JSON.stringify(query.value)) as WordQuery, cursor: append ? cursor.value : null, limit: 100 });
       if (request !== sequence) return;
       const wordsBefore = words.value;
       words.value = append ? [...new Map([...words.value, ...page.words].map(word => [word.id, word])).values()] : page.words;
-      total.value = page.total;
+      total.value = demo ? page.words.length : (page as WordPage).total;
       cursor.value = page.next_cursor;
       if (!append) {
         ++detailSequence;
@@ -84,18 +87,20 @@ export function useVocabulary() {
   }
 
   async function refresh() {
-    libraries.value = await vocabulary<Library[]>({ operation: 'libraries' });
-    tags.value = await vocabulary<Tag[]>({ operation: 'tags' });
+    libraries.value = demo ? demoLibraries : await vocabulary<Library[]>({ operation: 'libraries' });
     await search();
   }
 
+  let startupTimer: ReturnType<typeof setTimeout> | undefined;
   async function initialize() {
+    if (demo) { await refresh(); return; }
     try {
       storage.value = await api.storage();
-      if (ready.value) await refresh();
+      if (storage.value.state === 'ready') await refresh();
+      else if (storage.value.state === 'initializing') startupTimer = setTimeout(() => void initialize(), 250);
     } catch (cause) { error.value = errorMessage(cause); }
   }
 
-  onBeforeUnmount(() => { clearTimeout(timer); ++sequence; ++detailSequence; });
-  return { libraries, tags, storage, error, notice, loading, words, detail, activeId, selected, total, cursor, query, ready, select, search, schedule, beginComposition, endComposition, toggle, range, refresh, initialize };
+  onBeforeUnmount(() => { clearTimeout(timer); clearTimeout(startupTimer); ++sequence; ++detailSequence; });
+  return { libraries, storage, error, notice, loading, words, detail, activeId, selected, total, cursor, query, ready, select, search, schedule, beginComposition, endComposition, toggle, range, refresh, initialize };
 }

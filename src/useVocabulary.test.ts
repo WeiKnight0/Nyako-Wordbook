@@ -5,6 +5,7 @@ import type { WordDetail, WordPage, WordRow } from './vocabulary';
 
 const mocks = vi.hoisted(() => ({ vocabulary: vi.fn() }));
 vi.mock('./vocabulary', async original => ({ ...await original<typeof import('./vocabulary')>(), vocabulary: mocks.vocabulary }));
+vi.mock('./api', () => ({ desktop: true, api: { storage: vi.fn() }, errorMessage: String }));
 let app: App;
 let host: HTMLDivElement;
 function mount() {

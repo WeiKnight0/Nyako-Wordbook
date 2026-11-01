@@ -9,7 +9,7 @@ defineProps<{ storage?: StorageStatus }>();
     <div class="panel-heading">
       <h2>正式数据底座 · M1-A</h2>
       <span class="badge">
-        {{ storage?.state === 'ready' ? '存储已就绪' : storage?.state === 'blocked' ? '存储受阻' : '等待检查' }}
+        {{ storage?.state === 'ready' ? '存储已就绪' : storage?.state === 'blocked' ? '存储受阻' : '正在检查' }}
       </span>
     </div>
     <div v-if="storage?.state === 'ready'" class="storage-content">

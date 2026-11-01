@@ -52,13 +52,9 @@ export async function measureAcceptance(state: ReturnType<typeof useVocabulary>)
     await sample({ case: 'keyword', text, elapsed_ms, total: state.total.value });
   }
   await sample({ case: 'keywords/100-distinct', ...percentiles(keywordTimes), distinct: new Set(keywords).size });
-  for (const tags_all of [true, false]) {
-    const common = state.tags.value.find(tag => tag.name === '常用')!;
-    const other = state.tags.value.find(tag => tag.name === '分布标签3') ?? state.tags.value.find(tag => tag.id !== common.id)!;
-    state.query.value = { ...initial, tag_ids: [common.id, other.id], tags_all };
-    await group(`ui/tags/${tags_all}`);
-    state.query.value = { ...state.query.value, library_id: state.libraries.value.find(library => library.name === '基准主库')!.id, jlpt: 'N5', due: true, pos: 'noun' };
-    await group(`ui/compound/${tags_all}`);
+  for (const due of [true, false]) {
+    state.query.value = { ...initial, library_id: state.libraries.value.find(library => library.name === '基准主库')!.id, jlpt: 'N5', due, pos: 'noun' };
+    await group(`ui/compound/due-${due}`);
   }
   state.query.value = { ...initial };
   await search();

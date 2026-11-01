@@ -22,7 +22,7 @@
 
 
 :root {
-  font-family:Inter,"Segoe UI","Microsoft YaHei",sans-serif;
+  font-family:"Microsoft YaHei","Noto Sans CJK SC","PingFang SC",sans-serif;
   color:#263b34;
   background:#f5f6f2;
   font-synthesis:none;
@@ -39,6 +39,14 @@ body {
 
 button,input {
   font:inherit;
+}
+
+:lang(ja) {
+  font-family:"Yu Gothic","Meiryo","Noto Sans CJK JP","Hiragino Kaku Gothic ProN",sans-serif;
+}
+
+:lang(zh), :lang(zh-CN) {
+  font-family:"Microsoft YaHei","Noto Sans CJK SC","PingFang SC",sans-serif;
 }
 
 button {

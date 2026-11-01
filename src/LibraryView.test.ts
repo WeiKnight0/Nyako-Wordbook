@@ -18,6 +18,16 @@ beforeEach(async () => {
 });
 afterEach(() => { app.unmount(); host.remove(); });
 
+test('home exposes import beside the word list and opens data management', async () => {
+  const data = vi.fn();
+  app.unmount();
+  app = createApp(LibraryView, { onData: data }); app.mount(host); await settle();
+  expect(host.querySelector('.library-header')).not.toBeNull();
+  expect(host.querySelector('.advanced-filters')).not.toBeNull();
+  button('导入文件').click();
+  expect(data).toHaveBeenCalledOnce();
+});
+
 test('closing a dirty library offers choices, continuing cancels exit intent', async () => {
   button('新建词库').click(); await settle();
   const input = host.querySelector<HTMLInputElement>('[role="dialog"] input')!;
@@ -44,24 +54,8 @@ test('discarding dirty library after a window close completes exit', async () =>
   expect(mocks.vocabulary.mock.calls.some(([request]) => request.operation === 'save_library')).toBe(false);
 });
 
-test('tag write keeps its dialog open until the request settles', async () => {
-  app.unmount();
-  let resolve!: (value: unknown) => void;
-  const pending = new Promise(done => { resolve = done; });
-  mocks.vocabulary.mockImplementation(request => {
-    if (request.operation === 'tags') return Promise.resolve([{ id: 'tag', name: '标签' }]);
-    if (request.operation === 'save_tag') return pending;
-    return Promise.resolve(request.operation === 'list_words' ? { words: [], total: 0, next_cursor: null } : []);
-  });
-  app = createApp(LibraryView); app.mount(host); await settle();
-  button('管理').click(); await settle();
-  host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-  await settle();
-  const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
-  dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
-  expect(host.querySelector('[role="dialog"]')).toBe(dialog);
-  expect(button('关闭').disabled).toBe(true);
-  expect(button('删除标签…').disabled).toBe(true);
-  resolve([]); await settle();
-  expect(host.querySelector('[role="dialog"]')).toBeNull();
+test('home no longer exposes removed tag operations', async () => {
+  expect(host.textContent).not.toContain('管理标签');
+  expect(host.textContent).not.toContain('添加标签');
+  expect(mocks.vocabulary.mock.calls.some(([request]) => request.operation === 'tags')).toBe(false);
 });
