@@ -9,7 +9,7 @@ if(!(Test-Path (Join-Path $DataRoot '.nyako-acceptance'))){throw 'Missing accept
 $env:NYAKO_ACCEPTANCE_ROOT=$DataRoot
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--force-renderer-accessibility'
 $source=Join-Path $DataRoot 'input.json'
-@{format='nyako-wordbook';version=1;source_namespace='native-exchange';exported_at='2026-11-01T00:00:00Z';words=@(@{external_id='native-cat';kana='ねこ';senses=@(@{meaning='原生导入猫'});tags=@('原生导入')})}|ConvertTo-Json -Depth 8|Set-Content -Encoding UTF8 $source
+@{format='nyako-wordbook';version=2;source_namespace='native-exchange';exported_at='2026-11-01T00:00:00Z';words=@(@{external_id='native-cat';kanji='猫';kana='ねこ';senses=@(@{meaning='原生导入猫'})})}|ConvertTo-Json -Depth 8|Set-Content -Encoding UTF8 $source
 function Window {
  $condition=New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ProcessIdProperty,$script:process.Id)
  $script:window=[Windows.Automation.AutomationElement]::RootElement.FindFirst([Windows.Automation.TreeScope]::Children,$condition)
@@ -71,17 +71,15 @@ public static class NyakoDialog {
 }
 Start-App
 try{
- Fill '文件（也可拖入）' $source
- Fill '或新建词库（仅导入）' '原生交换词库'
+ Click '选择文件'
+ File-Dialog $source
+ Fill '新建词库' '原生交换词库'
  Click '全量校验并预览'
- [void](Element '确认并原子提交' ([Windows.Automation.ControlType]::Button))
- Click '返回词库'
- Click '数据管理'
  [void](Element '确认并原子提交' ([Windows.Automation.ControlType]::Button))
  Click '确认并原子提交'
  Start-Sleep -Milliseconds 700
- Click '返回词库'
- $selected=Element '选择 ねこ' ([Windows.Automation.ControlType]::CheckBox)
+ Click '← 返回词库'
+ $selected=Element '选择 猫' ([Windows.Automation.ControlType]::CheckBox)
  $selected.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern).Toggle()
  Click '导出所选词条'
  $json=Join-Path $DataRoot ('export-'+[guid]::NewGuid().ToString()+'.json')
@@ -90,19 +88,29 @@ try{
  if(!(Test-Path $json)){throw 'Native JSON export did not publish'}
  $document=Get-Content -Raw -Encoding UTF8 $json|ConvertFrom-Json
  if($document.words.Count -lt 1){throw 'Native JSON export empty'}
- $loss=Element '确认 CSV 有损导出' ([Windows.Automation.ControlType]::CheckBox)
- $loss.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern).Toggle()
- $csv=Join-Path $DataRoot ('export-'+[guid]::NewGuid().ToString()+'.csv')
- Click '导出 CSV'
- File-Dialog $csv
- if(!(Test-Path $csv)){throw 'Native CSV export did not publish'}
+ $xlsx=Join-Path $DataRoot ('export-'+[guid]::NewGuid().ToString()+'.xlsx')
+ Click '导出 Excel'
+ File-Dialog $xlsx
+ if(!(Test-Path $xlsx)){throw 'Native Excel export did not publish'}
+ Click '导入'
+ Fill '文件路径（也可拖入）' $xlsx
+ Click '查看样本'
+ Click '全量校验并预览'
+ Click '确认并原子提交'
+ Click '← 返回词库'
+ Click '数据管理'
+ $template=Join-Path $DataRoot 'template.xlsx'
+ Click '下载 Excel 模板'
+ File-Dialog $template
+ if(!(Test-Path $template)){throw 'Excel template was not published'}
+ Click '备份与恢复'
  $backup=Join-Path $DataRoot ('native-'+[guid]::NewGuid().ToString()+'.nyakobak')
  Click '创建完整备份'
  File-Dialog $backup
  if(!(Test-Path $backup)){throw 'Native backup dialog did not publish output'}
  Click '选择备份并完整校验'
  File-Dialog $backup
- $confirm=Element '我确认覆盖当前所有词库、学习状态和媒体' ([Windows.Automation.ControlType]::CheckBox)
+ $confirm=Element '我确认覆盖当前新版数据库中的词库和学习状态' ([Windows.Automation.ControlType]::CheckBox)
  $confirm.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern).Toggle()
  Click '安全备份后安排恢复'
  Start-Sleep -Milliseconds 1000
@@ -110,18 +118,18 @@ try{
  Close-App
  Start-App
  if(Test-Path (Join-Path $DataRoot 'restore-journal.json')){throw 'Restore journal was not finalized'}
- Click '返回词库'
+ Click '← 返回词库'
  [void](Element '编辑词库 原生交换词库' ([Windows.Automation.ControlType]::Button))
  [void](Element '搜索真实词条' ([Windows.Automation.ControlType]::Edit))
- Fill '搜索真实词条' '原生导入猫'
+ Fill '搜索真实词条' '猫'
  Start-Sleep -Milliseconds 500
- [void](Element '选择 ねこ' ([Windows.Automation.ControlType]::CheckBox))
+ [void](Element '选择 猫' ([Windows.Automation.ControlType]::CheckBox))
  Close-App
  Start-App
- Click '返回词库'
- Fill '搜索真实词条' '原生导入猫'
+ Click '← 返回词库'
+ Fill '搜索真实词条' '猫'
  Start-Sleep -Milliseconds 500
- [void](Element '选择 ねこ' ([Windows.Automation.ControlType]::CheckBox))
+ [void](Element '选择 猫' ([Windows.Automation.ControlType]::CheckBox))
  Close-App
  @{case='native/import-backup-dialog-validate-restore-search-reopen';passed=$true}|ConvertTo-Json|Set-Content -Encoding UTF8 (Join-Path $DataRoot 'exchange-results.json')
 }finally{if(!$script:process.HasExited){[void]$script:process.CloseMainWindow()}}
