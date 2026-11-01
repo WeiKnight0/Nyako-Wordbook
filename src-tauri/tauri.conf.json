@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NyakoWordbook",
+  "version": "0.1.0",
+  "identifier": "io.nyako.wordbook",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{ "title": "NyakoWordbook · 技术验证", "width": 1200, "height": 800, "minWidth": 960, "minHeight": 640 }],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-src 'none'"
+    }
+  },
+  "bundle": { "active": true, "targets": "all", "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"] }
+}
