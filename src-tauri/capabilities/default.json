@@ -3,5 +3,5 @@
   "identifier": "main-window",
   "description": "Only the main application window may use core desktop capabilities.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-destroy"]
 }

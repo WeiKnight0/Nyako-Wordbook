@@ -1,9 +1,12 @@
 #[cfg(feature = "acceptance")]
 mod acceptance;
+mod commands;
 pub mod database;
 mod error;
 mod scheduler;
 pub mod storage;
+mod timing;
+use commands::{exchange, exchange_file, exchange_status, exchange_target, vocabulary};
 
 use error::AppError;
 use serde::Serialize;
@@ -24,6 +27,7 @@ struct Health {
     sqlite_version: String,
     scheduler: &'static str,
     platform: &'static str,
+    acceptance_measure: bool,
 }
 
 #[tauri::command]
@@ -33,6 +37,8 @@ fn health() -> Health {
         sqlite_version: rusqlite::version().into(),
         scheduler: "FSRS 6 · fsrs-rs 6.6.2 · BSD-3-Clause",
         platform: std::env::consts::OS,
+        acceptance_measure: cfg!(feature = "acceptance")
+            && std::env::var_os("NYAKO_ACCEPTANCE_MEASURE").is_some(),
     }
 }
 
@@ -104,7 +110,35 @@ pub fn run() {
     };
     #[cfg(not(feature = "acceptance"))]
     let _ = &mut context;
+    #[cfg(feature = "acceptance")]
+    let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+        health,
+        run_diagnostics,
+        search_words,
+        scheduler_preview,
+        storage_status,
+        exchange,
+        exchange_file,
+        exchange_status,
+        exchange_target,
+        vocabulary,
+        acceptance::acceptance_sample
+    ];
+    #[cfg(not(feature = "acceptance"))]
+    let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+        health,
+        run_diagnostics,
+        search_words,
+        scheduler_preview,
+        storage_status,
+        exchange,
+        exchange_file,
+        exchange_status,
+        exchange_target,
+        vocabulary
+    ];
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -117,7 +151,9 @@ pub fn run() {
             let root = acceptance_root.clone();
             #[cfg(not(feature = "acceptance"))]
             let root = app.path().app_data_dir()?;
+            app.manage(storage::exchange::jobs::Jobs::default());
             app.manage(storage::StorageState::initialize(root.clone()));
+            let _diagnostics = timing::Timing::start("startup/diagnostics");
             let dir = root.join("diagnostics");
             std::fs::create_dir_all(&dir)?;
             let path = dir.join("probe.sqlite3");
@@ -128,13 +164,7 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            health,
-            run_diagnostics,
-            search_words,
-            scheduler_preview,
-            storage_status
-        ])
+        .invoke_handler(handler)
         .run(context)
         .expect("无法启动 NyakoWordbook");
 }

@@ -1,10 +1,19 @@
+#[cfg(feature = "benchmark")]
+pub mod benchmark;
+pub(crate) mod exchange;
+mod libraries;
 mod migrations;
+pub mod models;
+mod query;
 mod service;
 mod settings;
+mod tags;
+mod validation;
+mod words;
 
 use crate::error::AppError;
 use serde::Serialize;
-pub use service::StorageService;
+pub use service::{StorageService, VocabularyRequest};
 use std::path::PathBuf;
 
 /// @description 对外报告正式数据底座的可用性与失败原因。
@@ -58,6 +67,46 @@ impl StorageState {
         Self { root, availability }
     }
 
+    /// @description 仅在正式库就绪时执行词汇请求。
+    /// @param request 已反序列化的业务操作。
+    /// @throws 返回原始受阻原因或业务执行错误。
+    pub(crate) fn vocabulary(
+        &self,
+        request: VocabularyRequest,
+    ) -> Result<serde_json::Value, AppError> {
+        match &self.availability {
+            Availability::Ready(service) => service.vocabulary(request),
+            Availability::Blocked(error) => Err(error.clone()),
+        }
+    }
+
+    /// @description 仅在正式库就绪时执行数据交换请求。
+    /// @param request 文件预览或确认后的数据操作。
+    /// @throws 返回存储受阻、格式或事务错误。
+    pub(crate) fn exchange(
+        &self,
+        request: exchange::ExchangeRequest,
+        control: std::sync::Arc<exchange::jobs::Control>,
+    ) -> Result<serde_json::Value, AppError> {
+        match &self.availability {
+            Availability::Ready(service) => {
+                let request = match request {
+                    exchange::ExchangeRequest::Preview { path, options } => {
+                        let preview =
+                            exchange::preview_controlled(&self.root, &path, &options, &control)?;
+                        exchange::ExchangeRequest::PreparedPreview { preview }
+                    }
+                    exchange::ExchangeRequest::InspectCsv { path, options } => {
+                        return exchange::inspect_csv(&path, &options, &control);
+                    }
+                    request => request,
+                };
+                service.exchange(request, control)
+            }
+            Availability::Blocked(error) => Err(error.clone()),
+        }
+    }
+
     /// @description 将启动或请求失败统一呈现为正式存储状态。
     /// @param 无。
     /// @throws 不抛出；服务错误包含在受阻状态中。
@@ -77,3 +126,5 @@ use rusqlite::Connection;
 use settings::transaction;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vocabulary_tests;

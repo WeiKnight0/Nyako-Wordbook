@@ -2,6 +2,27 @@ use nyako_wordbook_lib::database;
 use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--formal") {
+        let root = args
+            .get(2)
+            .ok_or("--formal requires an absolute marked directory")?;
+        let count = args
+            .get(3)
+            .map(|v| v.parse())
+            .transpose()?
+            .unwrap_or(200_000);
+        return nyako_wordbook_lib::storage::benchmark::run_mode(
+            std::path::Path::new(root),
+            count,
+            args.get(4)
+                .map(String::as_str)
+                .filter(|arg| !arg.starts_with("--"))
+                .unwrap_or("shared"),
+            args.iter().any(|v| v == "--prepare-only"),
+        )
+        .map_err(|error| error.message.into());
+    }
     let path = std::env::temp_dir().join(format!("nyako-benchmark-{}.sqlite3", std::process::id()));
     let result = (|| -> Result<(), String> {
         let started = Instant::now();

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { createApp, nextTick, type App } from 'vue';
-import AppView from './App.vue';
+import AppView from './views/DiagnosticsView.vue';
 
 const mocks = vi.hoisted(() => ({
   search: vi.fn(),

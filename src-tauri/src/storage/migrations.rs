@@ -38,12 +38,15 @@ fn invalid(message: &str) -> AppError {
 }
 
 fn verify_integrity(conn: &Connection) -> Result<(), AppError> {
+    let integrity = crate::timing::Timing::start("storage/integrity");
     if conn.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))? != "ok" {
         return Err(AppError::new(
             "DB_CORRUPT",
             "数据库完整性检查失败；原数据已保留",
         ));
     }
+    drop(integrity);
+    let _foreign_keys = crate::timing::Timing::start("storage/foreign_keys");
     if conn
         .prepare("PRAGMA foreign_key_check")?
         .query([])?
@@ -56,7 +59,7 @@ fn verify_integrity(conn: &Connection) -> Result<(), AppError> {
 }
 
 fn verify_version(conn: &Connection, scripts: &[&str]) -> Result<usize, AppError> {
-    verify_integrity(conn)?;
+    let metadata = crate::timing::Timing::start("storage/version_metadata");
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version > scripts.len() as i64 {
         return Err(AppError::new(
@@ -87,6 +90,8 @@ fn verify_version(conn: &Connection, scripts: &[&str]) -> Result<usize, AppError
     {
         return Err(invalid("迁移版本不连续或脚本校验和不一致"));
     }
+    drop(metadata);
+    verify_integrity(conn)?;
     Ok(version as usize)
 }
 
@@ -152,13 +157,16 @@ fn prepare_database(
     scripts: &[&str],
     version: usize,
 ) -> Result<(), AppError> {
+    let _prepare = crate::timing::Timing::start("storage/prepare_connection");
     let mut conn = Connection::open(working)?;
     configure(&conn)?;
     if version > 0 && version < scripts.len() {
         snapshot(&conn, backups, version)?;
     }
-    migrate(&mut conn, scripts, version)?;
-    verify_version(&conn, scripts)?;
+    if version < scripts.len() {
+        migrate(&mut conn, scripts, version)?;
+        verify_version(&conn, scripts)?;
+    }
     conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
     Ok(())
 }
@@ -175,6 +183,7 @@ fn publish_database(
     if !existing {
         std::fs::rename(working, path)?;
     }
+    let _reopen = crate::timing::Timing::start("storage/reopen_configure");
     let conn = Connection::open(path)?;
     configure(&conn)?;
     Ok(conn)
@@ -197,10 +206,10 @@ pub(super) fn open_with_scripts(
 ) -> Result<Connection, AppError> {
     let existing = path.exists();
     let version = if existing {
-        verify_version(
-            &Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?,
-            scripts,
-        )?
+        let opened = crate::timing::Timing::start("storage/readonly_open");
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        drop(opened);
+        verify_version(&conn, scripts)?
     } else {
         0
     };

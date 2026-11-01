@@ -10,6 +10,7 @@ export interface Health {
   sqlite_version: string;
   scheduler: string;
   platform: string;
+  acceptance_measure?: boolean;
 }
 
 /**
