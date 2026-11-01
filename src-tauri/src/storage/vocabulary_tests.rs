@@ -1,4 +1,4 @@
-use super::{libraries, migrations, models::*, query, tags, words};
+use super::{libraries, migrations, models::*, query, words};
 use rusqlite::Connection;
 
 fn id() -> String {
@@ -7,7 +7,7 @@ fn id() -> String {
 fn content() -> WordInput {
     WordInput {
         id: id(),
-        kanji: None,
+        kanji: "働く".into(),
         kana: "はたらく".into(),
         jlpt: Some("N3".into()),
         note: "plain note".into(),
@@ -24,7 +24,6 @@ fn content() -> WordInput {
         examples: vec![],
         pitches: vec![],
         pos: vec!["godan_verb".into()],
-        tag_ids: vec![],
         library_ids: vec![],
     }
 }
@@ -43,8 +42,6 @@ fn filter() -> WordQuery {
         text: String::new(),
         library_id: None,
         unclassified: false,
-        tag_ids: vec![],
-        tags_all: true,
         jlpt: None,
         pos: None,
         state: None,
@@ -102,6 +99,16 @@ fn editing_reviewed_word_preserves_every_card_and_history_column() {
 fn aggregate_reorders_preserve_ids_examples_and_card() {
     let (_dir, mut conn) = database();
     let mut input = content();
+    input.pitches = vec![
+        Pitch {
+            id: id(),
+            downstep: 1,
+        },
+        Pitch {
+            id: id(),
+            downstep: 2,
+        },
+    ];
     input.examples.push(Example {
         id: id(),
         sense_id: Some(input.senses[0].id.clone()),
@@ -112,8 +119,10 @@ fn aggregate_reorders_preserve_ids_examples_and_card() {
     let card=conn.query_row("SELECT json_object('id',id,'state',state,'due',due_at,'revision',revision,'params',parameter_set_id) FROM cards",[],|r|r.get::<_,String>(0)).unwrap();
     let mut changed = saved.content.clone();
     changed.senses.reverse();
+    changed.pitches.reverse();
     let updated = words::save(&mut conn, changed, Some(saved.revision)).unwrap();
     assert_eq!(updated.content.senses[1].id, saved.content.senses[0].id);
+    assert_eq!(updated.content.pitches[0].id, saved.content.pitches[1].id);
     let mut changed = updated.content.clone();
     changed
         .senses
@@ -139,16 +148,12 @@ fn aggregate_reorders_preserve_ids_examples_and_card() {
 }
 
 #[test]
-fn shared_memberships_tags_batch_and_reopen() {
+fn shared_memberships_batch_and_reopen() {
     let (dir, mut conn) = database();
     let first = library(&mut conn, "同名");
     let second = library(&mut conn, "同名");
-    let tag = id();
-    tags::save(&mut conn, tag.clone(), "が".into(), None).unwrap();
-    assert!(tags::save(&mut conn, id(), "か\u{3099}".into(), None).is_err());
     let mut input = content();
     input.library_ids = vec![first.clone(), second.clone()];
-    input.tag_ids = vec![tag.clone()];
     let saved = words::save(&mut conn, input, None).unwrap();
     libraries::delete(&mut conn, &first, 1).unwrap();
     let updated = words::get(&conn, &saved.content.id).unwrap();
@@ -158,9 +163,6 @@ fn shared_memberships_tags_batch_and_reopen() {
             .unwrap(),
         1
     );
-    tags::delete(&mut conn, tag, "が".into()).unwrap();
-    let updated = words::get(&conn, &saved.content.id).unwrap();
-    assert!(updated.content.tag_ids.is_empty());
     let another = words::save(&mut conn, content(), None).unwrap();
     let selected = vec![
         SelectedWord {
@@ -234,8 +236,8 @@ fn broad_search_fallback_preserves_results_and_cursors() {
     let (_dir, conn) = database();
     conn.execute_batch(
         "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<10001)
-        INSERT INTO words(id,kana,search_text,created_at,updated_at)
-        SELECT printf('00000000-0000-4000-8000-%012x',i),'はたらく','はたらく',1,i FROM n;
+        INSERT INTO words(id,kanji,kana,search_text,created_at,updated_at)
+        SELECT printf('00000000-0000-4000-8000-%012x',i),'働く','はたらく','働く はたらく',1,i FROM n;
         INSERT INTO senses(id,word_id,position,meaning) SELECT id,id,0,'工作' FROM words;",
     )
     .unwrap();
@@ -253,42 +255,9 @@ fn broad_search_fallback_preserves_results_and_cursors() {
 }
 
 #[test]
-fn compound_tags_index_refresh_and_delete_impact() {
+fn search_index_refresh_and_delete_impact() {
     let (_dir, mut conn) = database();
-    let first = id();
-    let second = id();
-    tags::save(&mut conn, first.clone(), "first".into(), None).unwrap();
-    tags::save(&mut conn, second.clone(), "second".into(), None).unwrap();
-    let mut input = content();
-    input.tag_ids = vec![first.clone(), second.clone()];
-    let saved = words::save(&mut conn, input, None).unwrap();
-    let mut other = content();
-    other.tag_ids = vec![first.clone()];
-    words::save(&mut conn, other, None).unwrap();
-    let mut q = filter();
-    q.tag_ids = vec![first, second];
-    let tag_query = q.clone();
-    assert_eq!(query::list(&conn, q.clone(), None, 100).unwrap().total, 1);
-    q.tags_all = false;
-    assert_eq!(query::list(&conn, q.clone(), None, 100).unwrap().total, 2);
-    q.tag_ids.push(id());
-    q.tags_all = true;
-    assert_eq!(query::list(&conn, q.clone(), None, 100).unwrap().total, 0);
-    q.tags_all = false;
-    assert_eq!(query::list(&conn, q, None, 100).unwrap().total, 2);
-    for tags_all in [true, false] {
-        for descending in [true, false] {
-            let mut q = tag_query.clone();
-            q.tags_all = tags_all;
-            q.descending = descending;
-            let first = query::list(&conn, q.clone(), None, 1).unwrap();
-            assert_eq!(first.total, if tags_all { 1 } else { 2 });
-            if let Some(cursor) = first.next_cursor {
-                let next = query::list(&conn, q, Some(cursor), 1).unwrap();
-                assert_ne!(first.words[0].id, next.words[0].id);
-            }
-        }
-    }
+    let saved = words::save(&mut conn, content(), None).unwrap();
     let mut changed = saved.content;
     changed.note = "unique replacement".into();
     let saved = words::save(&mut conn, changed, Some(saved.revision)).unwrap();
@@ -300,17 +269,12 @@ fn compound_tags_index_refresh_and_delete_impact() {
         revision: saved.revision,
     }];
     assert_eq!(words::impact(&conn, &selected).unwrap().cards, 1);
-    assert!(words::batch(&mut conn, selected.clone(), "remove_tag", Some(id())).is_err());
-    assert_eq!(
-        words::get(&conn, &saved.content.id).unwrap().revision,
-        saved.revision
-    );
     words::batch(&mut conn, selected, "delete", None).unwrap();
     assert_eq!(query::list(&conn, q, None, 100).unwrap().total, 0);
     assert_eq!(
         conn.query_row("SELECT count(*) FROM cards", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        1
+        0
     );
 }
 

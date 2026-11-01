@@ -14,12 +14,12 @@ pub(crate) async fn exchange_file(
     save: bool,
     format: String,
 ) -> Result<Option<String>, AppError> {
-    if !["json", "csv", "nyakobak", "import"].contains(&format.as_str()) {
+    if !["json", "xlsx", "nyakobak", "import"].contains(&format.as_str()) {
         return Err(AppError::validation("未知文件类型"));
     }
     tauri::async_runtime::spawn_blocking(move || {
         let extensions = if format == "import" {
-            vec!["json", "csv", "tsv"]
+            vec!["xlsx", "json"]
         } else {
             vec![format.as_str()]
         };

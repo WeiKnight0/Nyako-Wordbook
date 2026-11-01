@@ -16,7 +16,7 @@ pub(crate) struct Control {
 }
 
 impl Control {
-    pub(super) fn check(&self) -> Result<(), AppError> {
+    pub(crate) fn check(&self) -> Result<(), AppError> {
         if self.cancel.load(Ordering::Acquire) {
             return Err(AppError::new(
                 "TASK_CANCELLED",
@@ -26,7 +26,7 @@ impl Control {
         Ok(())
     }
 
-    pub(super) fn publish<T>(
+    pub(crate) fn publish<T>(
         &self,
         action: impl FnOnce() -> Result<T, AppError>,
     ) -> Result<T, AppError> {

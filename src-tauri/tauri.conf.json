@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "title": "NyakoWordbook", "width": 1200, "height": 800, "minWidth": 960, "minHeight": 640 }],
+    "windows": [{ "title": "NyakoWordbook", "width": 1200, "height": 800, "minWidth": 960, "minHeight": 640, "backgroundColor": "#edf3ed" }],
     "security": {
       "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-src 'none'"
     }

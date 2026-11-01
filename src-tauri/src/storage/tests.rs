@@ -3,7 +3,7 @@ use migrations::{open_database, open_with_scripts, MIGRATIONS};
 
 fn word(conn: &Connection, id: &str) {
     conn.execute(
-        "INSERT INTO words(id,kana,created_at,updated_at) VALUES(?1,'はたらく',1,1)",
+        "INSERT INTO words(id,kanji,kana,created_at,updated_at) VALUES(?1,'働く','はたらく',1,1)",
         [id],
     )
     .unwrap();
@@ -22,10 +22,13 @@ fn schema_constraints_and_aggregate_rollback() {
         .execute("INSERT INTO examples VALUES('x','a','b',0,'働く',NULL)", [])
         .is_err());
     assert!(conn
-        .execute("INSERT INTO pitch_accents VALUES('p','a',2,3,NULL)", [])
+        .execute("INSERT INTO pitch_accents VALUES('p','a',-1,0)", [])
         .is_err());
     assert!(conn
-        .execute("INSERT INTO word_tags VALUES('a','missing')", [])
+        .execute(
+            "INSERT INTO words(id,kanji,kana,created_at,updated_at) VALUES('empty','','ねこ',1,1)",
+            []
+        )
         .is_err());
     conn.execute("INSERT INTO libraries VALUES('l','词库','',0,1,1,1)", [])
         .unwrap();
@@ -40,7 +43,7 @@ fn schema_constraints_and_aggregate_rollback() {
     );
     let failure = transaction(&mut conn, |tx| {
         tx.execute(
-            "INSERT INTO words(id,kana,created_at,updated_at) VALUES('orphan','ねこ',1,1)",
+            "INSERT INTO words(id,kanji,kana,created_at,updated_at) VALUES('orphan','猫','ねこ',1,1)",
             [],
         )?;
         Ok(())
@@ -226,6 +229,15 @@ fn ready_startup_has_consistent_status() {
     assert_eq!(status.word_count, Some(0));
     assert!(status.error.is_none());
     assert_eq!(state.status().state, "ready");
+}
+
+#[test]
+fn database_uses_data_directory_without_version_subdirectory() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = StorageState::initialize(dir.path().to_path_buf());
+    assert_eq!(state.status().state, "ready");
+    assert!(dir.path().join("data/main.sqlite3").exists());
+    assert!(!dir.path().join("v3").exists());
 }
 
 #[test]

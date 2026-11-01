@@ -10,7 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 pub(super) fn get(conn: &Connection, id: &str) -> Result<WordDetail, AppError> {
     validation::id(id)?;
     let mut detail = conn.query_row("SELECT w.kanji,w.kana,w.jlpt,w.note,w.revision,w.created_at,w.updated_at,c.state,c.due_at,coalesce(c.suspended,0),c.buried_until FROM words w LEFT JOIN cards c ON c.word_id=w.id AND c.card_type='recognition' WHERE w.id=?1", [id], |r| Ok(WordDetail {
-        content: WordInput { id:id.into(),kanji:r.get(0)?,kana:r.get(1)?,jlpt:r.get(2)?,note:r.get(3)?,senses:vec![],examples:vec![],pitches:vec![],pos:vec![],tag_ids:vec![],library_ids:vec![] },
+        content: WordInput { id:id.into(),kanji:r.get(0)?,kana:r.get(1)?,jlpt:r.get(2)?,note:r.get(3)?,senses:vec![],examples:vec![],pitches:vec![],pos:vec![],library_ids:vec![] },
         revision:r.get(4)?,created_at:r.get(5)?,updated_at:r.get(6)?,card_state:r.get(7)?,due_at:r.get(8)?,suspended:r.get(9)?,buried_until:r.get(10)?,
     })).optional()?.ok_or_else(missing)?;
     detail.content.senses = conn
@@ -34,26 +34,17 @@ pub(super) fn get(conn: &Connection, id: &str) -> Result<WordDetail, AppError> {
         })?
         .collect::<Result<_, _>>()?;
     detail.content.pitches = conn
-        .prepare(
-            "SELECT id,mora_count,downstep,source FROM pitch_accents WHERE word_id=?1 ORDER BY id",
-        )?
+        .prepare("SELECT id,downstep FROM pitch_accents WHERE word_id=?1 ORDER BY position")?
         .query_map([id], |r| {
             Ok(Pitch {
                 id: r.get(0)?,
-                mora_count: r.get(1)?,
-                downstep: r.get(2)?,
-                source: r.get(3)?,
+                downstep: r.get(1)?,
             })
         })?
         .collect::<Result<_, _>>()?;
     detail.content.pos = strings(
         conn,
         "SELECT pos_code FROM word_pos WHERE word_id=?1 ORDER BY pos_code",
-        id,
-    )?;
-    detail.content.tag_ids = strings(
-        conn,
-        "SELECT tag_id FROM word_tags WHERE word_id=?1 ORDER BY tag_id",
         id,
     )?;
     detail.content.library_ids = strings(
@@ -105,6 +96,10 @@ fn sync_children(conn: &Connection, value: &WordInput) -> Result<(), AppError> {
         "UPDATE examples SET position=position+1000000 WHERE word_id=?1",
         [&value.id],
     )?;
+    conn.execute(
+        "UPDATE pitch_accents SET position=position+1000000 WHERE word_id=?1",
+        [&value.id],
+    )?;
     for (position, sense) in value.senses.iter().enumerate() {
         conn.execute("INSERT INTO senses VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET position=excluded.position,meaning=excluded.meaning",params![sense.id,value.id,position as i64,sense.meaning])?;
     }
@@ -128,42 +123,30 @@ fn sync_children(conn: &Connection, value: &WordInput) -> Result<(), AppError> {
             conn.execute("DELETE FROM pitch_accents WHERE id=?1", [old])?;
         }
     }
-    for pitch in &value.pitches {
-        conn.execute("INSERT INTO pitch_accents VALUES(?1,?2,?3,?4,?5) ON CONFLICT(id) DO UPDATE SET mora_count=excluded.mora_count,downstep=excluded.downstep,source=excluded.source",params![pitch.id,value.id,pitch.mora_count,pitch.downstep,pitch.source])?;
+    for (position, pitch) in value.pitches.iter().enumerate() {
+        conn.execute("INSERT INTO pitch_accents(id,word_id,downstep,position) VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET downstep=excluded.downstep,position=excluded.position",params![pitch.id,value.id,pitch.downstep,position as i64])?;
     }
     conn.execute("DELETE FROM word_pos WHERE word_id=?1", [&value.id])?;
     for pos in &value.pos {
         conn.execute("INSERT INTO word_pos VALUES(?1,?2)", params![value.id, pos])?;
     }
-    for (table, column, ids) in [
-        ("word_tags", "tag_id", &value.tag_ids),
-        ("library_words", "library_id", &value.library_ids),
-    ] {
-        for old in strings(
-            conn,
-            &format!("SELECT {column} FROM {table} WHERE word_id=?1"),
-            &value.id,
-        )? {
-            if !ids.contains(&old) {
-                conn.execute(
-                    &format!("DELETE FROM {table} WHERE word_id=?1 AND {column}=?2"),
-                    params![value.id, old],
-                )?;
-            }
+    for old in strings(
+        conn,
+        "SELECT library_id FROM library_words WHERE word_id=?1",
+        &value.id,
+    )? {
+        if !value.library_ids.contains(&old) {
+            conn.execute(
+                "DELETE FROM library_words WHERE word_id=?1 AND library_id=?2",
+                params![value.id, old],
+            )?;
         }
-        for id in ids {
-            if table == "word_tags" {
-                conn.execute(
-                    "INSERT OR IGNORE INTO word_tags VALUES(?1,?2)",
-                    params![value.id, id],
-                )?;
-            } else {
-                conn.execute(
-                    "INSERT OR IGNORE INTO library_words VALUES(?1,?2,?3)",
-                    params![id, value.id, now()?],
-                )?;
-            }
-        }
+    }
+    for id in &value.library_ids {
+        conn.execute(
+            "INSERT OR IGNORE INTO library_words VALUES(?1,?2,?3)",
+            params![id, value.id, now()?],
+        )?;
     }
     Ok(())
 }
@@ -183,9 +166,7 @@ pub(super) fn save_in_transaction(
 ) -> Result<WordDetail, AppError> {
     let value = validation::word(input)?;
     let time = now()?;
-    let search = value
-        .kanji
-        .iter()
+    let search = std::iter::once(&value.kanji)
         .chain(std::iter::once(&value.kana))
         .chain(value.senses.iter().map(|s| &s.meaning))
         .chain(std::iter::once(&value.note))
@@ -198,7 +179,7 @@ pub(super) fn save_in_transaction(
                 tx.execute("INSERT INTO cards(id,word_id,card_type,state,scheduler_version,parameter_set_id,eligible_since) VALUES(?1,?2,'recognition','new','6.6.2','fsrs6-default',?3)",params![uuid::Uuid::new_v4().to_string(),value.id,time])?;
             }
             Some(revision) => {
-                if tx.execute("UPDATE words SET kanji=?1,kana=?2,jlpt=?3,note=?4,note_format='plain',search_text=?5,updated_at=?6,revision=revision+1 WHERE id=?7 AND revision=?8",params![value.kanji,value.kana,value.jlpt,value.note,search,time,value.id,revision])? != 1 { return Err(conflict()); }
+                if tx.execute("UPDATE words SET kanji=?1,kana=?2,jlpt=?3,note=?4,search_text=?5,updated_at=?6,revision=revision+1 WHERE id=?7 AND revision=?8",params![value.kanji,value.kana,value.jlpt,value.note,search,time,value.id,revision])? != 1 { return Err(conflict()); }
             }
         }
     sync_children(tx, &value)?;
@@ -266,15 +247,7 @@ pub(super) fn batch(
     action: &str,
     target: Option<String>,
 ) -> Result<usize, AppError> {
-    if ![
-        "add_library",
-        "remove_library",
-        "add_tag",
-        "remove_tag",
-        "delete",
-    ]
-    .contains(&action)
-    {
+    if !["add_library", "remove_library", "delete"].contains(&action) {
         return Err(AppError::validation("未知批量操作"));
     }
     if action != "delete" {
@@ -286,19 +259,14 @@ pub(super) fn batch(
     }
     transaction(conn, |tx| {
         check_selected(tx, &selected)?;
-        if action != "delete" {
-            let table = if action.ends_with("library") {
-                "libraries"
-            } else {
-                "tags"
-            };
-            if !tx.query_row(
-                &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE id=?1)"),
+        if action != "delete"
+            && !tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM libraries WHERE id=?1)",
                 [&target],
                 |row| row.get::<_, bool>(0),
-            )? {
-                return Err(missing());
-            }
+            )?
+        {
+            return Err(missing());
         }
         for word in &selected {
             match action {
@@ -315,18 +283,6 @@ pub(super) fn batch(
                     tx.execute(
                         "DELETE FROM library_words WHERE library_id=?1 AND word_id=?2",
                         params![target, word.id],
-                    )?;
-                }
-                "add_tag" => {
-                    tx.execute(
-                        "INSERT OR IGNORE INTO word_tags VALUES(?1,?2)",
-                        params![word.id, target],
-                    )?;
-                }
-                "remove_tag" => {
-                    tx.execute(
-                        "DELETE FROM word_tags WHERE word_id=?1 AND tag_id=?2",
-                        params![word.id, target],
                     )?;
                 }
                 _ => unreachable!(),

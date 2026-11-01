@@ -39,18 +39,7 @@ pub struct Example {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Pitch {
     pub id: String,
-    pub mora_count: i64,
     pub downstep: i64,
-    pub source: Option<String>,
-}
-
-/// @description 大小写敏感的归一化标签。
-/// @param 不适用，数据契约。
-/// @throws 不适用。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Tag {
-    pub id: String,
-    pub name: String,
 }
 
 /// @description 一次原子保存的词条内容聚合。
@@ -59,7 +48,7 @@ pub struct Tag {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WordInput {
     pub id: String,
-    pub kanji: Option<String>,
+    pub kanji: String,
     pub kana: String,
     pub jlpt: Option<String>,
     pub note: String,
@@ -67,7 +56,6 @@ pub struct WordInput {
     pub examples: Vec<Example>,
     pub pitches: Vec<Pitch>,
     pub pos: Vec<String>,
-    pub tag_ids: Vec<String>,
     pub library_ids: Vec<String>,
 }
 
@@ -92,7 +80,7 @@ pub struct WordDetail {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WordRow {
     pub id: String,
-    pub kanji: Option<String>,
+    pub kanji: String,
     pub kana: String,
     pub meaning: String,
     pub sense_count: i64,
@@ -100,7 +88,6 @@ pub struct WordRow {
     pub updated_at: i64,
     pub jlpt: Option<String>,
     pub pos: Vec<String>,
-    pub tags: Vec<Tag>,
     pub card_state: Option<String>,
     pub due_at: Option<i64>,
     pub suspended: bool,
@@ -115,8 +102,6 @@ pub struct WordQuery {
     pub text: String,
     pub library_id: Option<String>,
     pub unclassified: bool,
-    pub tag_ids: Vec<String>,
-    pub tags_all: bool,
     pub jlpt: Option<String>,
     pub pos: Option<String>,
     pub state: Option<String>,

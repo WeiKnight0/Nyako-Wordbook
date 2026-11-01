@@ -51,9 +51,15 @@ pub(super) fn unique<'a>(
     values.into_iter().try_for_each(id)
 }
 
+pub(super) fn mora_count(kana: &str) -> i64 {
+    kana.chars()
+        .filter(|c| !"ゃゅょぁぃぅぇぉャュョァィゥェォ".contains(*c) && !c.is_whitespace())
+        .count() as i64
+}
+
 pub(super) fn word(mut value: WordInput) -> Result<WordInput, AppError> {
     id(&value.id)?;
-    value.kanji = optional(value.kanji, 1000)?;
+    value.kanji = text(&value.kanji, 1, 1000)?;
     value.kana = text(&value.kana, 1, 1000)?;
     value.note = text(&value.note, 0, 100000)?;
     if value
@@ -69,7 +75,6 @@ pub(super) fn word(mut value: WordInput) -> Result<WordInput, AppError> {
     unique(value.senses.iter().map(|v| v.id.as_str()), 100)?;
     unique(value.examples.iter().map(|v| v.id.as_str()), 100)?;
     unique(value.pitches.iter().map(|v| v.id.as_str()), 20)?;
-    unique(value.tag_ids.iter().map(String::as_str), 100)?;
     unique(value.library_ids.iter().map(String::as_str), 500)?;
     if value.pos.len() > POS.len()
         || value.pos.iter().any(|v| !POS.contains(&v.as_str()))
@@ -91,11 +96,12 @@ pub(super) fn word(mut value: WordInput) -> Result<WordInput, AppError> {
             return Err(AppError::validation("例句关联的义项不属于当前词条"));
         }
     }
-    for pitch in &mut value.pitches {
-        if pitch.mora_count <= 0 || !(0..=pitch.mora_count).contains(&pitch.downstep) {
-            return Err(AppError::validation("音调下降位置应在零与拍数之间"));
-        }
-        pitch.source = optional(pitch.source.take(), 1000)?;
+    if value
+        .pitches
+        .iter()
+        .any(|pitch| !(0..=mora_count(&value.kana)).contains(&pitch.downstep))
+    {
+        return Err(AppError::validation("音调下降位置应在零与假名拍数之间"));
     }
     Ok(value)
 }

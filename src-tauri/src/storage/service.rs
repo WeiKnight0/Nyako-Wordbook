@@ -1,4 +1,4 @@
-use super::{libraries, migrations, models::*, query, settings, tags, words, StorageStatus};
+use super::{libraries, migrations, models::*, query, settings, words, StorageStatus};
 use crate::error::AppError;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -22,16 +22,6 @@ pub enum VocabularyRequest {
     DeleteLibrary {
         id: String,
         revision: i64,
-    },
-    Tags,
-    SaveTag {
-        id: String,
-        name: String,
-        expected: Option<String>,
-    },
-    DeleteTag {
-        id: String,
-        expected: String,
     },
     GetWord {
         id: String,
@@ -66,13 +56,6 @@ fn execute(
         }
         VocabularyRequest::DeleteLibrary { id, revision } => {
             serde_json::to_value(libraries::delete(conn, &id, revision)?)
-        }
-        VocabularyRequest::Tags => serde_json::to_value(tags::list(conn)?),
-        VocabularyRequest::SaveTag { id, name, expected } => {
-            serde_json::to_value(tags::save(conn, id, name, expected)?)
-        }
-        VocabularyRequest::DeleteTag { id, expected } => {
-            serde_json::to_value(tags::delete(conn, id, expected)?)
         }
         VocabularyRequest::GetWord { id } => serde_json::to_value(words::get(conn, &id)?),
         VocabularyRequest::SaveWord { content, expected } => {
@@ -185,7 +168,6 @@ fn worker(
                 let read_only = matches!(
                     *request,
                     VocabularyRequest::Libraries
-                        | VocabularyRequest::Tags
                         | VocabularyRequest::GetWord { .. }
                         | VocabularyRequest::ListWords { .. }
                         | VocabularyRequest::DeleteImpact { .. }

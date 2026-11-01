@@ -52,6 +52,10 @@ async fn run_diagnostics(
         let _guard = lock
             .lock()
             .map_err(|_| AppError::validation("数据库服务暂不可用"))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        database::initialize(&path, 2000)?;
         database::diagnostics(&path)
     })
     .await
@@ -152,14 +156,9 @@ pub fn run() {
             #[cfg(not(feature = "acceptance"))]
             let root = app.path().app_data_dir()?;
             app.manage(storage::exchange::jobs::Jobs::default());
-            app.manage(storage::StorageState::initialize(root.clone()));
-            let _diagnostics = timing::Timing::start("startup/diagnostics");
-            let dir = root.join("diagnostics");
-            std::fs::create_dir_all(&dir)?;
-            let path = dir.join("probe.sqlite3");
-            database::initialize(&path, 2000).map_err(|e| std::io::Error::other(e.message))?;
+            app.manage(storage::StorageState::start(root.clone()));
             app.manage(ProbeState {
-                path,
+                path: root.join("diagnostics/probe.sqlite3"),
                 lock: Arc::new(Mutex::new(())),
             });
             Ok(())

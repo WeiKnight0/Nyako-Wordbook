@@ -1,4 +1,6 @@
 mod backup;
+pub(crate) mod excel;
+mod excel_template;
 mod export;
 mod format;
 mod import;
@@ -19,6 +21,10 @@ use std::sync::atomic::Ordering;
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub(crate) enum ExchangeRequest {
     PendingImports,
+    ExcelTemplate {
+        path: std::path::PathBuf,
+        expected: Option<output::Fingerprint>,
+    },
     ResumeImport {
         task_id: String,
     },
@@ -26,9 +32,9 @@ pub(crate) enum ExchangeRequest {
         path: std::path::PathBuf,
         options: ImportOptions,
     },
-    InspectCsv {
+    InspectExcel {
         path: std::path::PathBuf,
-        options: format::CsvOptions,
+        options: excel::ExcelOptions,
     },
     #[serde(skip)]
     PreparedPreview {
@@ -72,11 +78,15 @@ pub(super) fn execute(
 ) -> Result<serde_json::Value, AppError> {
     control.check()?;
     let result = match request {
+        ExchangeRequest::ExcelTemplate { path, expected } => {
+            excel_template::save(&path, expected.as_ref(), control)?;
+            Ok(serde_json::json!({"saved":true}))
+        }
         ExchangeRequest::PendingImports => serde_json::to_value(import::pending(conn, root)?),
         ExchangeRequest::ResumeImport { task_id } => {
             serde_json::to_value(import::resume(conn, root, &task_id)?)
         }
-        ExchangeRequest::Preview { .. } | ExchangeRequest::InspectCsv { .. } => {
+        ExchangeRequest::Preview { .. } | ExchangeRequest::InspectExcel { .. } => {
             return Err(AppError::validation("预览必须先在独立文件任务中解析"))
         }
         ExchangeRequest::PreparedPreview { preview } => {
@@ -123,7 +133,7 @@ pub(super) fn execute(
 }
 
 use crate::error::AppError;
-use format::{CsvOptions, Document, ExchangeWord};
+use format::{Document, ExchangeWord};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -134,7 +144,7 @@ use std::{collections::HashSet, fs::File, io::Read, path::Path};
 pub(crate) struct ImportOptions {
     pub source_namespace: String,
     #[serde(default)]
-    pub csv: CsvOptions,
+    pub excel: excel::ExcelOptions,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -149,42 +159,19 @@ pub(crate) struct Preview {
     pub columns: Vec<String>,
 }
 
-fn encode(value: &impl Serialize) -> Result<String, AppError> {
-    serde_json::to_string(value).map_err(format::json_error)
-}
-
-/// @description 在映射前读取 CSV 表头和最多二十条样本。
-/// @param path 输入文件；options 编码分隔符规则；control 取消令牌。
-/// @throws 文件、编码、CSV 结构或取消错误。
-pub(super) fn inspect_csv(
+/// @description 在正式库队列外读取 Excel 工作表样本。
+/// @param path Excel 文件；options 工作表规则；control 取消令牌。
+/// @throws 文件或工作簿验证错误。
+pub(super) fn inspect_excel(
     path: &Path,
-    options: &format::CsvOptions,
+    options: &excel::ExcelOptions,
     control: &jobs::Control,
 ) -> Result<serde_json::Value, AppError> {
-    let text = format::decode(&read_source(path)?, &options.encoding)?;
-    let mut reader = csv::ReaderBuilder::new()
-        .delimiter(format::delimiter(&text, options.delimiter)?)
-        .has_headers(options.headers)
-        .from_reader(text.as_bytes());
-    let columns = reader
-        .headers()
-        .map_err(format::json_error)?
-        .iter()
-        .map(String::from)
-        .collect::<Vec<_>>();
-    let samples = reader
-        .records()
-        .take(20)
-        .map(|record| {
-            control.check()?;
-            Ok(record
-                .map_err(format::json_error)?
-                .iter()
-                .map(String::from)
-                .collect::<Vec<_>>())
-        })
-        .collect::<Result<Vec<_>, AppError>>()?;
-    Ok(serde_json::json!({"columns":columns,"samples":samples}))
+    excel::inspect(&read_source(path)?, options, control)
+}
+
+fn encode(value: &impl Serialize) -> Result<String, AppError> {
+    serde_json::to_string(value).map_err(format::json_error)
 }
 
 fn read_source(path: &Path) -> Result<Vec<u8>, AppError> {
@@ -251,7 +238,7 @@ fn parse_json(
     }
     envelope["words"] = serde_json::json!([]);
     let document: Document = serde_json::from_value(envelope).map_err(format::json_error)?;
-    if document.format != "nyako-wordbook" || document.version != 1 {
+    if document.format != "nyako-wordbook" || document.version != 2 {
         return Err(AppError::validation("不支持的 JSON 格式或版本"));
     }
     super::validation::text(&document.source_namespace, 1, 1000)?;
@@ -283,74 +270,6 @@ fn parse_json(
         valid += usize::from(stage_row(conn, index + 1, word, &present)?);
     }
     Ok((document.source_namespace, valid, words.len()))
-}
-
-fn parse_csv(
-    conn: &Connection,
-    bytes: &[u8],
-    options: &ImportOptions,
-    control: &jobs::Control,
-) -> Result<(Vec<String>, usize, usize), AppError> {
-    let text = format::decode(bytes, &options.csv.encoding)?;
-    let separator = format::delimiter(&text, options.csv.delimiter)?;
-    let mut reader = csv::ReaderBuilder::new()
-        .delimiter(separator)
-        .has_headers(options.csv.headers)
-        .flexible(false)
-        .from_reader(text.as_bytes());
-    let headers = reader
-        .headers()
-        .map_err(format::json_error)?
-        .iter()
-        .map(String::from)
-        .collect::<Vec<_>>();
-    let columns = if options.csv.columns.is_empty() && options.csv.headers {
-        headers
-            .iter()
-            .enumerate()
-            .filter(|(_, name)| format::COLUMNS.contains(&name.as_str()))
-            .map(|(index, name)| (name.clone(), index))
-            .collect()
-    } else {
-        options.csv.columns.clone()
-    };
-    if columns
-        .keys()
-        .any(|name| !format::COLUMNS.contains(&name.as_str()))
-        || columns.values().any(|index| *index >= headers.len())
-    {
-        return Err(AppError::validation("列映射包含未知字段或越界位置"));
-    }
-    if !columns.contains_key("kana") || !columns.contains_key("meaning") {
-        return Err(AppError::validation("请映射 kana 和 meaning 两个必填列"));
-    }
-    let present = format::fields(&columns);
-    let mut valid = 0;
-    let mut total = 0;
-    for record in reader.records() {
-        control.check()?;
-        control.processed.store(total, Ordering::Release);
-        let record = record.map_err(format::json_error);
-        if record
-            .as_ref()
-            .is_ok_and(|record| record.iter().all(|s| s.trim().is_empty()))
-        {
-            continue;
-        }
-        total += 1;
-        if total > format::MAX_WORDS {
-            return Err(AppError::validation("词条超过 50 万条"));
-        }
-        let line = record
-            .as_ref()
-            .ok()
-            .and_then(|r| r.position())
-            .map(|p| p.line() as usize)
-            .unwrap_or(total + usize::from(options.csv.headers));
-        let word = record.and_then(|record| format::csv_word(&record, &columns, &options.csv));
-        valid += usize::from(stage_row(conn, line, word, &present)?);
-    }
-    Ok((headers, valid, total))
 }
 
 /// @description 将不可信导入文件解析到独立暂存数据库，不修改正式词库。
@@ -385,13 +304,24 @@ pub(super) fn preview_controlled(
         .copied()
         .find(|byte| !byte.is_ascii_whitespace())
         .is_some_and(|byte| byte == b'{');
-    let (namespace, columns, _, total) = if is_json {
-        let (namespace, valid, total) = parse_json(&tx, content, control)?;
-        (namespace, vec![], valid, total)
+    let is_excel = source
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("xlsx"));
+    let (namespace, total) = if is_excel {
+        let (namespace, rows, present) =
+            excel::parse(&bytes, &options.excel, &options.source_namespace, control)?;
+        let total = rows.len();
+        for (line, word) in rows {
+            stage_row(&tx, line, word, &present)?;
+        }
+        (namespace, total)
+    } else if is_json {
+        let (namespace, _, total) = parse_json(&tx, content, control)?;
+        (namespace, total)
     } else {
-        super::validation::text(&options.source_namespace, 1, 1000)?;
-        let (columns, valid, total) = parse_csv(&tx, &bytes, options, control)?;
-        (options.source_namespace.clone(), columns, valid, total)
+        return Err(AppError::validation(
+            "仅支持新版 Excel (.xlsx) 或 JSON 导入",
+        ));
     };
     tx.execute("UPDATE rows SET content=NULL,error='文件内 external_id 重复' WHERE json_extract(content,'$.external_id') IN (SELECT json_extract(content,'$.external_id') FROM rows WHERE content IS NOT NULL AND json_extract(content,'$.external_id') IS NOT NULL GROUP BY json_extract(content,'$.external_id') HAVING count(*)>1)", [])?;
     let valid = tx.query_row(
@@ -401,13 +331,13 @@ pub(super) fn preview_controlled(
     )? as usize;
     let preview = Preview {
         task_id,
-        format: if is_json { "json" } else { "csv" }.into(),
+        format: if is_excel { "xlsx" } else { "json" }.into(),
         source_namespace: namespace,
         file_hash: hash(&bytes),
         valid,
         errors: total - valid,
         total,
-        columns,
+        columns: vec![],
     };
     for (key, value) in [
         ("preview", encode(&preview)?),
@@ -427,7 +357,7 @@ mod format_tests {
     #[test]
     fn json_rejects_duplicate_keys_unknown_fields_and_bad_relations() {
         assert!(format::strict_json(br#"{"a":1,"a":2}"#).is_err());
-        let mut word: ExchangeWord = serde_json::from_value(serde_json::json!({"kana":"ねこ","senses":[{"meaning":"猫"}],"examples":[{"jp":"猫だ","sense_index":2}]})).unwrap();
+        let mut word: ExchangeWord = serde_json::from_value(serde_json::json!({"kanji":"猫","kana":"ねこ","senses":[{"meaning":"猫"}],"examples":[{"jp":"猫だ","sense_index":2}]})).unwrap();
         assert!(word.validate().is_err());
         assert!(serde_json::from_value::<ExchangeWord>(
             serde_json::json!({"kana":"ねこ","senses":[],"card_state":"new"})
@@ -436,42 +366,18 @@ mod format_tests {
     }
 
     #[test]
-    fn csv_preview_is_isolated_and_counts_error_rows_once() {
+    fn csv_is_rejected() {
         let root = tempfile::tempdir().unwrap();
         let file = root.path().join("words.csv");
-        std::fs::write(&file, "kana,meaning,example_jp,example_cn\r\nねこ,猫,\"猫は\n可愛い\",猫很可爱\r\n,坏行,,中文独存\r\n").unwrap();
-        let result = preview(
+        std::fs::write(&file, "写法,假名,释义\n猫,ねこ,猫").unwrap();
+        assert!(preview(
             root.path(),
             &file,
             &ImportOptions {
                 source_namespace: "test".into(),
-                csv: CsvOptions::default(),
-            },
+                excel: Default::default(),
+            }
         )
-        .unwrap();
-        assert_eq!((result.valid, result.errors, result.total), (1, 1, 2));
-        assert!(!root.path().join("data/main.sqlite3").exists());
-        let conn = Connection::open(
-            root.path()
-                .join("staging")
-                .join(result.task_id)
-                .join("import.sqlite3"),
-        )
-        .unwrap();
-        let content: String = conn
-            .query_row(
-                "SELECT content FROM rows WHERE content IS NOT NULL",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert!(content.contains("猫は\\n可愛い"));
-    }
-
-    #[test]
-    fn cp932_is_explicit_and_invalid_utf8_is_rejected() {
-        let (bytes, _, _) = encoding_rs::SHIFT_JIS.encode("ねこ,猫");
-        assert!(format::decode(&bytes, "utf-8").is_err());
-        assert_eq!(format::decode(&bytes, "cp932").unwrap(), "ねこ,猫");
+        .is_err());
     }
 }

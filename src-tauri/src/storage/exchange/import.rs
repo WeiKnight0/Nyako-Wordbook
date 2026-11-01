@@ -84,7 +84,7 @@ fn changed() -> AppError {
 pub(super) fn snapshot(conn: &Connection) -> Result<String, AppError> {
     let mut result = sha2::Sha256::new();
     use sha2::Digest;
-    for sql in ["SELECT id,revision FROM words ORDER BY id", "SELECT id,revision FROM libraries ORDER BY id", "SELECT id,name FROM tags ORDER BY id", "SELECT library_id,word_id FROM library_words ORDER BY library_id,word_id", "SELECT source_namespace,external_id,word_id,last_import_hash FROM source_links ORDER BY source_namespace,external_id"] {
+    for sql in ["SELECT id,revision FROM words ORDER BY id", "SELECT id,revision FROM libraries ORDER BY id", "SELECT library_id,word_id FROM library_words ORDER BY library_id,word_id", "SELECT source_namespace,external_id,word_id,last_import_hash FROM source_links ORDER BY source_namespace,external_id"] {
         let mut stmt = conn.prepare(sql)?;
         let columns = stmt.column_count();
         let mut rows = stmt.query([])?;
@@ -178,23 +178,20 @@ fn candidates(
     };
     let mut stmt = conn.prepare("SELECT w.id,w.revision,w.kanji,w.kana,(SELECT meaning FROM senses WHERE word_id=w.id ORDER BY position LIMIT 1) FROM words w WHERE w.id=?1 OR (w.kana=?2 AND coalesce(w.kanji,'')=?3) ORDER BY w.id")?;
     let mut rows: Vec<Candidate> = stmt
-        .query_map(
-            params![matched, word.kana, word.kanji.as_deref().unwrap_or("")],
-            |r| {
-                Ok(Candidate {
-                    id: r.get(0)?,
-                    revision: r.get(1)?,
-                    kanji: r.get(2)?,
-                    kana: r.get(3)?,
-                    meaning: r.get(4)?,
-                    content: serde_json::Value::Null,
-                })
-            },
-        )?
+        .query_map(params![matched, word.kana, word.kanji], |r| {
+            Ok(Candidate {
+                id: r.get(0)?,
+                revision: r.get(1)?,
+                kanji: r.get(2)?,
+                kana: r.get(3)?,
+                meaning: r.get(4)?,
+                content: serde_json::Value::Null,
+            })
+        })?
         .collect::<Result<_, _>>()?;
     rows.iter_mut().try_for_each(|candidate| {
         candidate.content =
-            serde_json::to_value(portable(conn, &words::get(conn, &candidate.id)?.content)?)
+            serde_json::to_value(portable(&words::get(conn, &candidate.id)?.content))
                 .map_err(json_error)?;
         Ok::<_, AppError>(())
     })?;
@@ -261,19 +258,10 @@ pub(super) fn page(
 }
 
 /// @description 转换为不含数据库身份和学习状态的可交换内容。
-/// @param conn 标签查询连接；input 完整词条。
-/// @throws 标签读取失败时返回错误。
-pub(super) fn portable(conn: &Connection, input: &WordInput) -> Result<ExchangeWord, AppError> {
-    let mut tags: Vec<String> = input
-        .tag_ids
-        .iter()
-        .map(|id| {
-            conn.query_row("SELECT name FROM tags WHERE id=?1", [id], |r| r.get(0))
-                .map_err(AppError::from)
-        })
-        .collect::<Result<_, _>>()?;
-    tags.sort();
-    Ok(ExchangeWord {
+/// @param input 完整词条。
+/// @throws 不抛出。
+pub(super) fn portable(input: &WordInput) -> ExchangeWord {
+    ExchangeWord {
         external_id: None,
         kanji: input.kanji.clone(),
         kana: input.kana.clone(),
@@ -283,9 +271,7 @@ pub(super) fn portable(conn: &Connection, input: &WordInput) -> Result<ExchangeW
             .pitches
             .iter()
             .map(|p| ExchangePitch {
-                mora_count: p.mora_count,
                 downstep: p.downstep,
-                source: p.source.clone(),
             })
             .collect(),
         senses: input
@@ -307,10 +293,8 @@ pub(super) fn portable(conn: &Connection, input: &WordInput) -> Result<ExchangeW
                     .and_then(|id| input.senses.iter().position(|s| &s.id == id)),
             })
             .collect(),
-        tags,
         note: input.note.clone(),
-        note_format: "plain".into(),
-    })
+    }
 }
 
 fn empty(value: &serde_json::Value) -> bool {
@@ -338,7 +322,6 @@ fn merge(
         "pitch_accents",
         "senses",
         "examples",
-        "tags",
         "note",
     ] {
         if !present.contains(field) {
@@ -376,7 +359,6 @@ pub(super) fn commit(
         "pitch_accents",
         "senses",
         "examples",
-        "tags",
         "note",
     ]
     .into_iter()
@@ -505,10 +487,7 @@ pub(super) fn commit(
             return Err(AppError::validation("已有来源映射只能复用原词条或跳过"));
         }
         let existing = target.as_ref().map(|id| words::get(&tx, id)).transpose()?;
-        let current = existing
-            .as_ref()
-            .map(|detail| portable(&tx, &detail.content))
-            .transpose()?;
+        let current = existing.as_ref().map(|detail| portable(&detail.content));
         let mut merged = match &current {
             Some(current) => merge(current, &incoming, &present, choice)?,
             None => incoming.clone(),
@@ -526,7 +505,11 @@ pub(super) fn commit(
                 if previous.senses == merged.senses {
                     input.senses = detail.content.senses.clone();
                 }
-                if previous.examples == merged.examples && previous.senses != merged.senses {
+                if previous.examples == merged.examples
+                    && previous.senses != merged.senses
+                    && !previous.examples.is_empty()
+                    && !(choice.strategy == "replace" && choice.fields.contains("examples"))
+                {
                     return Err(AppError::validation("替换义项时请同时确认例句及其义项关联"));
                 }
                 input
@@ -538,7 +521,7 @@ pub(super) fn commit(
                             .sense_index
                             .map(|index| input.senses[index].id.clone());
                     });
-                if previous.examples == merged.examples {
+                if previous.examples == merged.examples && previous.senses == merged.senses {
                     input.examples = detail.content.examples.clone();
                 }
                 if previous.pitch_accents == merged.pitch_accents {
@@ -551,19 +534,6 @@ pub(super) fn commit(
                 .unwrap_or_default();
             if !input.library_ids.contains(&library) {
                 input.library_ids.push(library.clone());
-            }
-            for tag in &merged.tags {
-                let tag_id = tx
-                    .query_row("SELECT id FROM tags WHERE name=?1", [tag], |r| {
-                        r.get::<_, String>(0)
-                    })
-                    .optional()?
-                    .unwrap_or_else(id);
-                tx.execute(
-                    "INSERT OR IGNORE INTO tags VALUES(?1,?2)",
-                    params![tag_id, tag],
-                )?;
-                input.tag_ids.push(tag_id);
             }
             words::save_in_transaction(&tx, input, existing.as_ref().map(|v| v.revision))?;
             if existing.is_some() {

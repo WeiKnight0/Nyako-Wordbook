@@ -96,7 +96,7 @@ fn safe_path(name: &str) -> Result<(), AppError> {
     {
         return Err(invalid("备份包含不安全路径"));
     }
-    if name != "data/main.sqlite3" && !name.starts_with("media/") {
+    if name != "data/main.sqlite3" {
         return Err(invalid("备份包含未声明类型的文件"));
     }
     if name.split('/').any(|part| {
@@ -137,16 +137,9 @@ fn safe_path(name: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-fn media(conn: &Connection) -> Result<Vec<(String, u64, String)>, AppError> {
-    if conn.query_row("SELECT EXISTS(SELECT 1 FROM media m JOIN word_media wm ON wm.media_id=m.id WHERE m.status!='ready' OR m.size<0)", [], |row| row.get::<_, bool>(0))? {
-        return Err(invalid("存在尚未就绪或大小无效的引用媒体，请先修复后备份"));
-    }
-    Ok(conn.prepare("SELECT DISTINCT m.relative_path,m.size,m.sha256 FROM media m JOIN word_media wm ON wm.media_id=m.id ORDER BY m.relative_path")?.query_map([],|r|Ok((r.get(0)?,r.get::<_,i64>(1)? as u64,r.get(2)?)))?.collect::<Result<_,_>>()?)
-}
-
-/// @description 在串行写队列中建立含引用媒体的一致完整备份。
+/// @description 在串行写队列中建立数据库一致快照备份。
 /// @param conn 正式库连接；root 数据根；destination 不存在的目标文件。
-/// @throws 返回快照、缺媒体、磁盘空间或归档错误，原目标不变。
+/// @throws 快照、磁盘空间或归档失败时原目标不变。
 pub(super) fn create(
     conn: &Connection,
     root: &Path,
@@ -182,14 +175,7 @@ pub(super) fn controlled(
     let result = (|| {
         let page_count = conn.query_row("PRAGMA page_count", [], |r| r.get::<_, u32>(0))? as u64;
         let page_size = conn.query_row("PRAGMA page_size", [], |r| r.get::<_, u32>(0))? as u64;
-        let references = media(conn)?;
-        let required = references.iter().try_fold(
-            page_count.saturating_mul(page_size),
-            |sum, (_, size, _)| {
-                sum.checked_add(*size)
-                    .ok_or_else(|| invalid("备份大小溢出"))
-            },
-        )?;
+        let required = page_count.saturating_mul(page_size);
         if required > MAX_EXPANDED {
             return Err(invalid("备份展开超过 8GiB"));
         }
@@ -215,25 +201,16 @@ pub(super) fn controlled(
             }
         }
         drop(backup);
-        let mut paths = vec![("data/main.sqlite3".to_string(), snapshot.clone())];
-        for (relative, size, expected_hash) in media(&target)? {
-            let name = format!("media/{relative}");
-            safe_path(&name)?;
-            let path = root.join(&name);
-            if file_hash(&path)? != (size, expected_hash) {
-                return Err(invalid("媒体内容或长度与数据库不一致，未生成备份"));
-            }
-            paths.push((name, path));
-        }
+        let paths = [("data/main.sqlite3".to_string(), snapshot.clone())];
         let manifest = Manifest {
             format: "nyako-backup".into(),
-            version: 1,
+            version: 2,
             schema_version: migrations::MIGRATIONS.len(),
             app_version: env!("CARGO_PKG_VERSION").into(),
             created_at: now()?,
             words: target.query_row("SELECT count(*) FROM words", [], |r| r.get(0))?,
             events: target.query_row("SELECT count(*) FROM review_events", [], |r| r.get(0))?,
-            media: paths.len() - 1,
+            media: 0,
             files: paths
                 .iter()
                 .map(|(name, path)| {
@@ -325,8 +302,11 @@ pub(super) fn validate_controlled(
         serde_json::from_value(strict_json(&bytes)?).map_err(json_error)?
     };
     if manifest.format != "nyako-backup"
-        || manifest.version != 1
-        || manifest.schema_version > migrations::MIGRATIONS.len()
+        || manifest.version != 2
+        || manifest.schema_version != migrations::MIGRATIONS.len()
+        || manifest.media != 0
+        || manifest.files.len() != 1
+        || manifest.files[0].path != "data/main.sqlite3"
     {
         return Err(invalid("备份格式或数据库版本不兼容"));
     }
@@ -413,23 +393,13 @@ pub(super) fn validate_controlled(
     }
     drop(original);
     let conn = migrations::open_database(&database, &directory.join("migration-backups"))?;
-    let references = media(&conn)?;
     if conn.query_row("SELECT count(*) FROM words", [], |row| row.get::<_, i64>(0))?
         != manifest.words
         || conn.query_row("SELECT count(*) FROM review_events", [], |row| {
             row.get::<_, i64>(0)
         })? != manifest.events
-        || references.len() != manifest.media
-        || manifest.files.len() != manifest.media + 1
     {
-        return Err(invalid("清单词条、学习记录或媒体统计与数据库不一致"));
-    }
-    for (relative, size, sha) in references {
-        let name = format!("media/{relative}");
-        safe_path(&name)?;
-        if file_hash(&directory.join(name))? != (size, sha) {
-            return Err(invalid("备份媒体引用不完整"));
-        }
+        return Err(invalid("清单词条或学习记录统计与数据库不一致"));
     }
     conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
     conn.close().map_err(|(_, error)| AppError::from(error))?;
