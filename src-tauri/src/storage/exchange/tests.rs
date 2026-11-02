@@ -564,6 +564,92 @@ fn preview_file(root: &Path, conn: &Connection, file: &Path) -> Preview {
 }
 
 #[test]
+fn verb_transitivity_survives_excel_and_json_roundtrips() {
+    let root = tempfile::tempdir().unwrap();
+    let mut conn = database(root.path());
+    let mut word = super::format::ExchangeWord {
+        external_id: Some("verb-one".into()),
+        kanji: "開く".into(),
+        kana: "あく".into(),
+        parts_of_speech: vec!["godan_verb".into(), "intransitive".into()],
+        jlpt: Some("N4".into()),
+        pitch_accents: vec![],
+        senses: vec![super::format::ExchangeSense {
+            meaning: "开".into(),
+        }],
+        examples: vec![],
+        note: String::new(),
+    };
+    let source = root.path().join("verbs.xlsx");
+    super::excel::write(&source, "verbs", &[word.clone()], &jobs::Control::default()).unwrap();
+    let task = preview_file(root.path(), &conn, &source);
+    assert_eq!((task.valid, task.errors), (1, 0));
+    commit(
+        &mut conn,
+        root.path(),
+        &task.task_id,
+        options(),
+        &jobs::Control::default(),
+    )
+    .unwrap();
+    let word_id: String = conn
+        .query_row("SELECT id FROM words", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        crate::storage::words::get(&conn, &word_id)
+            .unwrap()
+            .content
+            .pos,
+        word.parts_of_speech
+    );
+    let output = root.path().join("verbs.json");
+    super::export::export(
+        &mut conn,
+        super::export::ExportOptions {
+            path: output.clone(),
+            format: "json".into(),
+            library_id: options().library_id,
+            selected: vec![],
+            expected: None,
+        },
+    )
+    .unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let mut restored = database(second.path());
+    let task = preview_file(second.path(), &restored, &output);
+    commit(
+        &mut restored,
+        second.path(),
+        &task.task_id,
+        options(),
+        &jobs::Control::default(),
+    )
+    .unwrap();
+    let restored_id: String = restored
+        .query_row("SELECT id FROM words", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        crate::storage::words::get(&restored, &restored_id)
+            .unwrap()
+            .content
+            .pos,
+        word.parts_of_speech
+    );
+    word.parts_of_speech = vec![
+        "godan_verb".into(),
+        "intransitive".into(),
+        "transitive".into(),
+    ];
+    assert!(super::excel::write(
+        &root.path().join("invalid.xlsx"),
+        "verbs",
+        &[word],
+        &jobs::Control::default()
+    )
+    .is_err());
+}
+
+#[test]
 fn repeated_import_preserves_cards_and_child_identity() {
     let root = tempfile::tempdir().unwrap();
     let mut conn = database(root.path());

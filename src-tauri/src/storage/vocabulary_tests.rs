@@ -27,6 +27,23 @@ fn content() -> WordInput {
         library_ids: vec![],
     }
 }
+#[test]
+fn verb_transitivity_is_optional_exclusive_and_requires_verb_form() {
+    let (_dir, mut conn) = database();
+    let mut input = content();
+    input.pos.push("intransitive".into());
+    let saved = words::save(&mut conn, input.clone(), None).unwrap();
+    assert_eq!(saved.content.pos, vec!["godan_verb", "intransitive"]);
+    input.pos.push("transitive".into());
+    assert!(super::validation::word(input.clone()).is_err());
+    input.pos = vec!["transitive".into()];
+    assert!(super::validation::word(input).is_err());
+    assert_eq!(
+        words::get(&conn, &saved.content.id).unwrap().content.pos,
+        saved.content.pos
+    );
+}
+
 fn database() -> (tempfile::TempDir, Connection) {
     let dir = tempfile::tempdir().unwrap();
     let conn = migrations::open_database(

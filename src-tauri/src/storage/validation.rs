@@ -15,6 +15,8 @@ pub(super) const POS: &[&str] = &[
     "particle",
     "expression",
     "other",
+    "intransitive",
+    "transitive",
 ];
 
 pub(super) fn text(value: &str, min: usize, max: usize) -> Result<String, AppError> {
@@ -81,6 +83,21 @@ pub(super) fn word(mut value: WordInput) -> Result<WordInput, AppError> {
         || value.pos.iter().collect::<HashSet<_>>().len() != value.pos.len()
     {
         return Err(AppError::validation("词性编码无效或重复"));
+    }
+    if value.pos.contains(&"intransitive".to_string())
+        && value.pos.contains(&"transitive".to_string())
+    {
+        return Err(AppError::validation("自动词和他动词不能同时标注"));
+    }
+    if value
+        .pos
+        .iter()
+        .any(|pos| ["intransitive", "transitive"].contains(&pos.as_str()))
+        && !value.pos.iter().any(|pos| {
+            ["godan_verb", "ichidan_verb", "suru_verb", "kuru_verb"].contains(&pos.as_str())
+        })
+    {
+        return Err(AppError::validation("自动词或他动词需要搭配动词活用类别"));
     }
     for sense in &mut value.senses {
         sense.meaning = text(&sense.meaning, 1, 10000)?;

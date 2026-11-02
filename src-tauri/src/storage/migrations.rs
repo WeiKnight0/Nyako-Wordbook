@@ -11,6 +11,7 @@ const APPLICATION_ID: i64 = 0x4e594133;
 pub(super) const MIGRATIONS: &[&str] = &[
     include_str!("migrations/003_wordbook.sql"),
     include_str!("migrations/002_search.sql"),
+    include_str!("migrations/004_verb_transitivity.sql"),
 ];
 
 fn timestamp(time: SystemTime) -> Result<i64, AppError> {

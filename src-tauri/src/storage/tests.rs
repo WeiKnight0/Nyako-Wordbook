@@ -93,6 +93,7 @@ fn upgrade_snapshot_includes_wal_and_failed_upgrade_rolls_back() {
     let scripts = [
         MIGRATIONS[0],
         MIGRATIONS[1],
+        MIGRATIONS[2],
         "CREATE TABLE must_rollback(id); INVALID SQL;",
     ];
     assert_eq!(
@@ -105,7 +106,7 @@ fn upgrade_snapshot_includes_wal_and_failed_upgrade_rolls_back() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        2
+        MIGRATIONS.len() as i64
     );
     assert_eq!(
         conn.query_row(
@@ -115,6 +116,56 @@ fn upgrade_snapshot_includes_wal_and_failed_upgrade_rolls_back() {
         )
         .unwrap(),
         0
+    );
+}
+
+#[test]
+fn transitivity_upgrade_preserves_words_cards_and_previous_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("main.sqlite3");
+    let backups = dir.path().join("backups");
+    let old = open_with_scripts(&path, &backups, &MIGRATIONS[..2]).unwrap();
+    word(&old, "legacy");
+    old.execute("INSERT INTO word_pos VALUES('legacy','godan_verb')", [])
+        .unwrap();
+    old.execute("INSERT INTO cards(id,word_id,card_type,state,scheduler_version,parameter_set_id,eligible_since) VALUES('card','legacy','recognition','new','6.6.2','fsrs6-default',1)", []).unwrap();
+    drop(old);
+    let conn = open_database(&path, &backups).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT pos_code FROM word_pos WHERE word_id='legacy'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "godan_verb"
+    );
+    assert_eq!(
+        conn.query_row("SELECT id FROM cards WHERE word_id='legacy'", [], |row| row
+            .get::<_, String>(0))
+            .unwrap(),
+        "card"
+    );
+    conn.execute("INSERT INTO word_pos VALUES('legacy','intransitive')", [])
+        .unwrap();
+    let backup = std::fs::read_dir(backups)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let snapshot = Connection::open(backup).unwrap();
+    assert_eq!(
+        snapshot
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        snapshot
+            .query_row("SELECT id FROM cards", [], |row| row.get::<_, String>(0))
+            .unwrap(),
+        "card"
     );
 }
 
@@ -224,7 +275,7 @@ fn ready_startup_has_consistent_status() {
     let state = StorageState::initialize(dir.path().to_path_buf());
     let status = state.status();
     assert_eq!(status.state, "ready");
-    assert_eq!(status.schema_version, Some(2));
+    assert_eq!(status.schema_version, Some(MIGRATIONS.len()));
     assert_eq!(status.library_count, Some(0));
     assert_eq!(status.word_count, Some(0));
     assert!(status.error.is_none());
