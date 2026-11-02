@@ -83,7 +83,7 @@ flowchart LR
 
 M4 为例句补充 `cloze_start`、`cloze_end` 和 `answer_match_options_json`：范围使用原文 NFC 归一化后的 Unicode 标量索引、左闭右开，不使用 UTF-8 字节或 JavaScript UTF-16 下标；编辑例句原文时必须重新校验挖空范围。JSON/Protobuf 交换协议同阶段显式升级以携带这些字段，不修改已冻结的 V1 含义。
 
-词性首批编码建议为 `noun`、`godan_verb`、`ichidan_verb`、`suru_verb`、`kuru_verb`、`i_adjective`、`na_adjective`、`adverb`、`particle`、`expression`、`other`；一个词可多选，不声称覆盖所有日语语法体系。
+当前词性编码为 `noun`、`godan_verb`、`ichidan_verb`、`suru_verb`、`kuru_verb`、`i_adjective`、`na_adjective`、`adverb`、`particle`、`expression`、`other`，另有 `intransitive`（自动词）与 `transitive`（他动词）两个动词附加属性。一个词可保留多个适用词性；自／他属性最多一个，且须伴随至少一个动词活用类别；不确定时不录入属性。通过追加迁移扩展 `word_pos` 约束，旧库旧词条保持原状。
 
 音调按拍而非字符计数；拗音与促音/长音需按日语规则处理。自动计算仅作提示，无法确认时允许用户手动修正或不录入音调。
 
