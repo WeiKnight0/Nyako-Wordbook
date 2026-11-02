@@ -1,30 +1,31 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount } from 'vue';
+import { computed } from 'vue';
 import { partsOfSpeech, type Library, type WordDetail } from '../vocabulary';
-defineProps<{ word: WordDetail; libraries: Library[]; readonly?: boolean }>();
-const emit = defineEmits<{ edit: []; close: [] }>();
-let restoreFocus = false;
+const props = defineProps<{ word?: WordDetail; libraries: Library[]; readonly?: boolean }>();
+const partLabels = computed(() => partsOfSpeech.filter(([code]) => props.word?.content.pos.includes(code)).map(([, label]) => label).join(' / '));
+const memberships = computed(() => props.libraries.filter(library => props.word?.content.library_ids.includes(library.id)).map(library => library.name).join(' / ') || '未分类');
+const emit = defineEmits<{ edit: []; delete: []; close: [] }>();
 function close(event?: KeyboardEvent) {
   if (event && (event.isComposing || event.repeat)) return;
   event?.preventDefault();
-  restoreFocus = true;
   emit('close');
 }
-onBeforeUnmount(() => {
-  if (restoreFocus) void nextTick(() => document.querySelector<HTMLElement>('[aria-label="正式词条列表"]')?.focus());
-});
 </script>
 <template>
   <aside class="formal-detail" aria-label="词条详情" tabindex="-1" @keydown.esc="close">
-    <div class="panel-heading"><h2 lang="ja">{{ word.content.kanji || word.content.kana }}</h2><button class="text-button" @click="close()">收起详情</button></div>
-    <p lang="ja">{{ word.content.kana }}</p><button v-if="!readonly" @click="$emit('edit')">编辑词条</button>
-    <p class="muted">版本 {{ word.revision }} · {{ word.content.jlpt || 'JLPT 未知' }}</p>
-    <p>{{ partsOfSpeech.filter(([code]) => word.content.pos.includes(code)).map(([, label]) => label).join(' / ') }}</p>
-    <h3>全部义项</h3><ol><li v-for="sense in word.content.senses" :key="sense.id">{{ sense.meaning }}</li></ol>
-    <h3>例句</h3><div v-for="example in word.content.examples" :key="example.id" class="detail-example"><p lang="ja">{{ example.jp }}</p><p>{{ example.cn }}</p><small>{{ word.content.senses.find(sense => sense.id === example.sense_id)?.meaning || '不关联义项' }}</small></div>
-    <h3>音调</h3><p>{{ word.content.pitches.length ? word.content.pitches.map(pitch => pitch.downstep).join(' / ') : '未知' }}</p>
-    <h3>所属词库</h3><p>{{ libraries.filter(library => word.content.library_ids.includes(library.id)).map(library => library.name).join(' / ') || '未分类' }}</p>
-    <h3>备注</h3><p class="plain-note">{{ word.content.note || '无备注' }}</p>
-    <p class="muted">{{ word.card_state }} · {{ word.due_at ? new Date(word.due_at).toLocaleString() : '尚未安排复习' }}{{ word.suspended ? ' · 已暂停' : '' }}{{ word.buried_until ? ' · 已埋藏' : '' }}。正式评分将在 M2 开放。</p>
+    <button class="drawer-handle" aria-label="收回词条详情" title="收回词条详情" @click="close()">‹</button>
+    <div class="detail-content" :aria-busy="!word">
+      <p v-if="!word" class="detail-loading" role="status">正在加载词条…</p>
+      <template v-else>
+      <div class="detail-top"><span class="eyebrow">词条详情</span><div v-if="!readonly" class="detail-actions"><button class="secondary-button" @click="$emit('edit')">编辑词条</button><button class="danger-button" @click="$emit('delete')">删除词条</button></div></div>
+      <h2 lang="ja">{{ word.content.kanji || word.content.kana }}</h2>
+      <p class="detail-reading" lang="ja">{{ word.content.kana }}</p>
+      <p class="detail-meta">{{ word.content.jlpt || 'JLPT 未知' }}<template v-if="word.content.pos.length"> · {{ partLabels }}</template></p>
+      <section class="detail-section"><h3>释义</h3><ol><li v-for="sense in word.content.senses" :key="sense.id" lang="zh-CN">{{ sense.meaning }}</li></ol></section>
+      <section v-if="word.content.examples.length" class="detail-section"><h3>例句</h3><div v-for="example in word.content.examples" :key="example.id" class="detail-example"><p lang="ja">{{ example.jp }}</p><p lang="zh-CN">{{ example.cn }}</p></div></section>
+      <section class="detail-section detail-facts"><div><h3>音调</h3><p>{{ word.content.pitches.length ? word.content.pitches.map(pitch => pitch.downstep).join(' / ') : '未知' }}</p></div><div><h3>所属词库</h3><p>{{ memberships }}</p></div></section>
+      <section v-if="word.content.note" class="detail-section"><h3>备注</h3><p class="plain-note" lang="zh-CN">{{ word.content.note }}</p></section>
+      </template>
+    </div>
   </aside>
 </template>

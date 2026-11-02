@@ -12,6 +12,7 @@ export function useVocabulary() {
   const loading = ref(false);
   const words = ref<WordRow[]>([]);
   const detail = ref<WordDetail>();
+  const detailLoading = ref(false);
   const activeId = ref('');
   const selected = ref<SelectedWord[]>([]);
   const total = ref(0);
@@ -26,12 +27,14 @@ export function useVocabulary() {
 
   async function select(id: string) {
     activeId.value = id;
-    detail.value = undefined;
+    detailLoading.value = true;
     const request = ++detailSequence;
     try {
       const result = demo ? demoDetail(id) : await vocabulary<WordDetail>({ operation: 'get_word', id });
       if (request === detailSequence) detail.value = result;
-    } catch (cause) { if (request === detailSequence) error.value = errorMessage(cause); }
+    } catch (cause) {
+      if (request === detailSequence) { detail.value = undefined; error.value = errorMessage(cause); }
+    } finally { if (request === detailSequence) detailLoading.value = false; }
   }
 
   async function search(append = false) {
@@ -53,7 +56,7 @@ export function useVocabulary() {
         const oldIndex = Math.max(0, wordsBefore.findIndex(word => word.id === activeId.value));
         const id = page.words.find(word => word.id === activeId.value)?.id ?? page.words[Math.min(oldIndex, page.words.length - 1)]?.id;
         if (id) await select(id);
-        else { activeId.value = ''; detail.value = undefined; }
+        else { activeId.value = ''; detail.value = undefined; detailLoading.value = false; }
       }
     } catch (cause) { if (request === sequence) error.value = errorMessage(cause); }
     finally { if (request === sequence) loading.value = false; }
@@ -102,5 +105,5 @@ export function useVocabulary() {
   }
 
   onBeforeUnmount(() => { clearTimeout(timer); clearTimeout(startupTimer); ++sequence; ++detailSequence; });
-  return { libraries, storage, error, notice, loading, words, detail, activeId, selected, total, cursor, query, ready, select, search, schedule, beginComposition, endComposition, toggle, range, refresh, initialize };
+  return { libraries, storage, error, notice, loading, words, detail, detailLoading, activeId, selected, total, cursor, query, ready, select, search, schedule, beginComposition, endComposition, toggle, range, refresh, initialize };
 }

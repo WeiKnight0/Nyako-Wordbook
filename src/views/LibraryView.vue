@@ -11,10 +11,10 @@ import WordList from '../components/WordList.vue';
 import WordDetailView from '../components/WordDetail.vue';
 import EditorDialog from '../components/EditorDialog.vue';
 
-const emit = defineEmits<{ diagnostics: []; data: [selected?: string[]] }>();
+const emit = defineEmits<{ diagnostics: []; data: [selected?: string[], section?: 'import' | 'export' | 'backup'] }>();
 const state = useVocabulary();
 const {
-  libraries, storage, error, notice, loading, words, detail, activeId,
+  libraries, storage, error, notice, loading, words, detail, detailLoading, activeId,
   selected, total, cursor, query, ready, select, search, schedule,
   beginComposition, endComposition, toggle, range, refresh, initialize,
 } = state;
@@ -24,13 +24,10 @@ const wordDialog = ref(false);
 const editingWord = ref<WordDetail>();
 const editor = ref<InstanceType<typeof WordEditor>>();
 const libraryEditor = ref<InstanceType<typeof LibraryEditor>>();
-const showDetail = ref(window.innerWidth >= 1200);
-let wideLayout = window.innerWidth >= 1200;
-function resize() {
-  const wide = window.innerWidth >= 1200;
-  if (wide !== wideLayout) showDetail.value = wide;
-  wideLayout = wide;
-}
+const showDetail = ref(false);
+function openWord(id: string) { showDetail.value = true; void select(id); }
+function closeDetail() { showDetail.value = false; }
+function detailExited() { document.querySelector<HTMLElement>('[aria-label="正式词条列表"], [aria-label="演示词条列表"]')?.focus(); }
 function closeConfirmation() { if (!busy.value) confirmation.value = undefined; }
 const searchInput = ref<HTMLInputElement>();
 const busy = ref(false);
@@ -84,14 +81,19 @@ function deleteLibrary() {
     query.value.library_id = null; selected.value = []; await refresh();
   } };
 }
-async function deleteWords() {
+async function deleteSelection(selection: { id: string; revision: number }[]) {
   await action(async () => {
-    const selection = [...selected.value];
     const impact = await vocabulary<DeleteImpact>({ operation: 'delete_impact', selected: selection });
     confirmation.value = { title: '永久删除词条', message: `将永久删除 ${selection.length} 个词条、${impact.memberships} 条成员关系、${impact.cards} 张卡片及 ${impact.events} 条历史事件。建议先到数据管理创建完整备份。此操作不可撤销。`, second: true, stage: 1, run: async () => {
-      await vocabulary({ operation: 'batch', selected: selection, action: 'delete', target: null }); selected.value = []; await refresh();
+      await vocabulary({ operation: 'batch', selected: selection, action: 'delete', target: null });
+      selected.value = []; showDetail.value = false; await refresh(); notice.value = `已删除 ${selection.length} 个词条。`;
     } };
   });
+}
+function deleteWords() { void deleteSelection([...selected.value]); }
+function deleteCurrentWord() {
+  if (!detail.value || busy.value || modal.value) return;
+  void deleteSelection([{ id: detail.value.content.id, revision: detail.value.revision }]);
 }
 async function confirm() {
   const current = confirmation.value!;
@@ -105,7 +107,6 @@ function shortcuts(event: KeyboardEvent) {
 }
 onMounted(async () => {
   window.addEventListener('keydown', shortcuts);
-  window.addEventListener('resize', resize);
   if (!desktop && !demo) { error.value = '浏览器生产预览没有原生后端，请使用 npm run desktop:dev。'; return; }
   await initialize();
   if (!desktop) return;
@@ -130,7 +131,6 @@ let disposed = false;
 onBeforeUnmount(() => {
   disposed = true;
   window.removeEventListener('keydown', shortcuts);
-  window.removeEventListener('resize', resize);
   unlisten?.();
 });
 defineExpose({ modal });
@@ -145,10 +145,10 @@ defineExpose({ modal });
       <button class="nav" :class="{ active: query.unclassified }" @click="scope(null, true)">未分类</button>
       <div class="sidebar-group-label library-heading">词库 <button class="text-button" :disabled="!ready || demo" @click="libraryForm()">新建词库</button></div>
       <div class="library-nav"><div v-for="library in libraries" :key="library.id" class="library-nav-row"><button :class="{ active: query.library_id === library.id }" @click="scope(library.id)">{{ library.name }} <small>{{ library.word_count }}{{ library.archived ? ' · 归档' : '' }}</small></button><button :aria-label="`编辑词库 ${library.name}`" class="text-button" :disabled="demo" @click="libraryForm(library)">编辑</button></div></div>
-      <div class="sidebar-actions"><button class="sidebar-import" :disabled="busy || modal" @click="emit('data')">导入数据</button><button class="text-button" :disabled="busy || modal" @click="emit('data')">数据管理</button><button class="text-button" :disabled="demo" @click="emit('diagnostics')">技术诊断</button></div>
+      <div class="sidebar-actions"><button class="sidebar-import" :disabled="busy || modal" @click="emit('data', [], 'import')">数据管理</button><button class="text-button" :disabled="demo" @click="emit('diagnostics')">技术诊断</button></div>
     </aside>
     <main :inert="modal">
-      <header class="library-header"><div><div class="eyebrow">词汇管理 / {{ currentLibrary ? '词库' : '全部' }}</div><h1 tabindex="-1">{{ query.unclassified ? '未分类' : currentLibrary?.name || '全部词条' }}</h1><p v-if="currentLibrary?.description" class="muted">{{ currentLibrary.description }}</p></div><div class="toolbar"><button class="secondary-button" :disabled="busy" @click="emit('data')">导入文件</button><button :disabled="!ready || busy || demo" @click="newWord">新增词条</button><button v-if="currentLibrary && !demo" class="danger-button" :disabled="busy" @click="deleteLibrary">删除词库</button></div></header>
+      <header class="library-header"><div><div class="eyebrow">词汇管理 / {{ currentLibrary ? '词库' : '全部' }}</div><h1 tabindex="-1">{{ query.unclassified ? '未分类' : currentLibrary?.name || '全部词条' }}</h1><p v-if="currentLibrary?.description" class="muted">{{ currentLibrary.description }}</p></div><div class="toolbar"><button class="secondary-button" :disabled="busy" @click="emit('data', [], 'import')">导入文件</button><button :disabled="!ready || busy || demo" @click="newWord">新增词条</button><button v-if="currentLibrary && !demo" class="danger-button" :disabled="busy" @click="deleteLibrary">删除词库</button></div></header>
       <p v-if="demo" class="demo-banner" role="status">浏览器演示 · 下方是 8 条隔离样例，不是正式词库或 Excel 导入结果。可查看、检索和切换词库；保存及文件操作请使用桌面版。</p>
       <p v-if="error" class="error" role="alert">{{ error }}</p><p v-if="notice" class="notice" role="status">{{ notice }}</p>
       <StoragePanel v-if="!ready" :storage="storage" />
@@ -175,21 +175,21 @@ defineExpose({ modal });
       </section>
       <section v-if="selected.length && !demo" class="batch-toolbar" aria-label="批量操作">
         <strong>当前已选 {{ selected.length }} 条</strong>
-        <button :disabled="busy" @click="emit('data', selected.map(word => word.id))">导出所选词条</button>
+        <button :disabled="busy" @click="emit('data', selected.map(word => word.id), 'export')">导出所选词条</button>
         <select v-model="batchTarget" aria-label="目标词库"><option value="">选择词库</option><option v-for="library in libraries" :key="library.id" :value="library.id">{{ library.name }}</option></select>
         <button :disabled="busy || !batchTarget" @click="batch('add_library', batchTarget)">加入词库</button><button :disabled="busy || !batchTarget" @click="batch('remove_library', batchTarget)">移出词库</button>
         <button class="danger-button" :disabled="busy" @click="deleteWords">永久删除词条…</button><button class="text-button" @click="selected = []">清空选择</button>
       </section>
-      <section v-if="ready" class="formal-workspace" :class="{ 'detail-hidden': !showDetail }">
-        <div class="list-panel"><div class="panel-heading"><h2>{{ total }} 个匹配词条</h2><button class="text-button" @click="showDetail = !showDetail">{{ showDetail ? '折叠详情' : '展开详情' }}</button></div>
-          <WordList :words="words" :active-id="activeId" :selected="selected" :loading="loading" :readonly="demo" @select="select" @toggle="toggle" @range="range" @open="showDetail = true" />
+      <section v-if="ready" class="formal-workspace">
+        <div class="list-panel"><div class="panel-heading"><h2>{{ total }} 个匹配词条</h2><button v-if="detail && !showDetail" class="text-button" @click="showDetail = true">查看当前词条</button></div>
+          <WordList :words="words" :active-id="activeId" :selected="selected" :loading="loading" :readonly="demo" @select="openWord" @toggle="toggle" @range="range" @open="showDetail = true" />
           <footer><span>{{ loading ? '正在更新…' : `已加载 ${words.length} / ${total} 条` }}</span><button v-if="cursor" :disabled="loading" @click="search(true)">加载下一页</button></footer>
         </div>
-        <WordDetailView v-if="detail && showDetail" :word="detail" :libraries="libraries" :readonly="demo" @edit="editWord" @close="showDetail = false" />
       </section>
     </main>
-    <LibraryEditor v-if="libraryDialog" ref="libraryEditor" :library="editingLibrary" @close="closeEditor" @saved="savedLibrary" @continue-editing="exitRequested = false" />
-    <WordEditor v-if="wordDialog" ref="editor" :word="editingWord" :libraries="libraries" :library-id="query.library_id" @close="closeEditor" @saved="savedWord" @continue-editing="exitRequested = false" />
-    <EditorDialog v-if="confirmation" :title="confirmation.title" :busy="busy" @close="closeConfirmation"><div class="editor-form"><p v-if="error" class="error" role="alert">{{ error }}</p><p>{{ confirmation.message }}</p><p v-if="confirmation.stage === 2" class="error">第二次确认：此操作将永久删除上述数据。</p><button class="danger-button" :disabled="busy" @click="confirm">{{ confirmation.second && confirmation.stage === 1 ? '我已了解，继续确认' : '确认执行' }}</button><button :disabled="busy" @click="confirmation = undefined">取消</button></div></EditorDialog>
+    <Transition name="drawer" @after-leave="detailExited"><WordDetailView v-if="showDetail && (detail || detailLoading)" :word="detailLoading ? undefined : detail" :libraries="libraries" :readonly="demo" @edit="editWord" @delete="deleteCurrentWord" @close="closeDetail" /></Transition>
+    <Transition name="dialog"><LibraryEditor v-if="libraryDialog" ref="libraryEditor" :library="editingLibrary" @close="closeEditor" @saved="savedLibrary" @continue-editing="exitRequested = false" /></Transition>
+    <Transition name="dialog"><WordEditor v-if="wordDialog" ref="editor" :word="editingWord" :libraries="libraries" :library-id="query.library_id" @close="closeEditor" @saved="savedWord" @continue-editing="exitRequested = false" /></Transition>
+    <Transition name="dialog"><EditorDialog v-if="confirmation" :title="confirmation.title" :busy="busy" @close="closeConfirmation"><div class="editor-form"><p v-if="error" class="error" role="alert">{{ error }}</p><p>{{ confirmation.message }}</p><p v-if="confirmation.stage === 2" class="error">第二次确认：此操作将永久删除上述数据。</p><button class="danger-button" :disabled="busy" @click="confirm">{{ confirmation.second && confirmation.stage === 1 ? '我已了解，继续确认' : '确认执行' }}</button><button :disabled="busy" @click="confirmation = undefined">取消</button></div></EditorDialog></Transition>
   </div>
 </template>
