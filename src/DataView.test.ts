@@ -10,6 +10,7 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onDragDrop
 let app: App;
 let host: HTMLDivElement;
 async function settle() { for (let i = 0; i < 30; i++) await Promise.resolve(); await nextTick(); }
+async function settleTransition() { await new Promise(resolve => setTimeout(resolve, 30)); await settle(); }
 function button(label: string) { return [...host.querySelectorAll('button')].find(item => item.textContent?.trim() === label)!; }
 beforeEach(async () => {
   mocks.invoke.mockReset();
@@ -42,7 +43,14 @@ test('preview errors require explicit valid-only confirmation and are shown befo
   const checkbox = [...host.querySelectorAll<HTMLInputElement>('input[type=checkbox]')].find(input => input.parentElement?.textContent?.includes('我确认仅导入有效行'))!;
   checkbox.checked = true; checkbox.dispatchEvent(new Event('change', { bubbles: true })); await settle();
   expect(button('确认并原子提交').disabled).toBe(false);
+  button('确认并原子提交').click(); await settle();
+  expect(host.querySelector('[role="dialog"]')?.textContent).toContain('跳过 1 条错误行');
   expect(mocks.invoke.mock.calls.some(([command, args]) => command === 'exchange' && args.request.operation === 'commit')).toBe(false);
+  button('取消').click(); await settle();
+  expect(host.querySelector('.dialog-leave-active')).not.toBeNull();
+  await settleTransition();
+  expect(host.querySelector('[role="dialog"]')).toBeNull();
+  expect(host.textContent).toContain('假名缺失');
 });
 
 test('cached data view keeps preview when navigating back to the library', async () => {
@@ -82,6 +90,43 @@ test('explicit selection exports ids without a library scope', async () => {
   });
   button('导出 JSON').click(); await settle();
   expect(mocks.invoke).toHaveBeenCalledWith('exchange', { request: { operation: 'export', options: { path: '/export.json', format: 'json', library_id: null, selected: ['word-one', 'word-two'], expected: null } } });
+  expect(host.querySelector('[role="dialog"]')?.textContent).toContain('JSON 已导出');
+});
+
+test('existing export target requires in-app confirmation and cancel does not write', async () => {
+  app.unmount(); app = createApp(DataView, { selected: ['word-one'] }); app.mount(host); await settle();
+  mocks.invoke.mockImplementation(async command => command === 'exchange_file' ? '/existing.xlsx' : command === 'exchange_target' ? { size: 10 } : { job_id: 'export' });
+  button('导出 Excel').click(); await settle();
+  expect(host.querySelector('[role="dialog"]')?.textContent).toContain('/existing.xlsx');
+  button('取消').click(); await settle();
+  expect(mocks.invoke.mock.calls.some(([command]) => command === 'exchange')).toBe(false);
+});
+
+test('file target lookup failure appears in a result dialog', async () => {
+  app.unmount(); app = createApp(DataView, { selected: ['word-one'] }); app.mount(host); await settle();
+  mocks.invoke.mockImplementation(async command => {
+    if (command === 'exchange_file') return '/export.xlsx';
+    if (command === 'exchange_target') throw new Error('路径不可访问');
+  });
+  button('导出 Excel').click(); await settle();
+  expect(host.querySelector('[role="dialog"]')?.textContent).toContain('路径不可访问');
+  expect(mocks.invoke.mock.calls.some(([command]) => command === 'exchange')).toBe(false);
+});
+
+test('reentering cached data view chooses requested section without clearing import path', async () => {
+  app.unmount();
+  const { KeepAlive, defineComponent, h, ref } = await import('vue');
+  const visible = ref(true);
+  const entry = ref(1);
+  const target = ref<'import' | 'export'>('import');
+  app = createApp(defineComponent({ setup: () => () => h(KeepAlive, {}, { default: () => visible.value ? h(DataView, { entry: entry.value, entrySection: target.value }) : null }) }));
+  app.mount(host); await settle();
+  const path = host.querySelector<HTMLInputElement>('.file-picker input')!;
+  path.value = '/words.xlsx'; path.dispatchEvent(new Event('input', { bubbles: true })); await settle();
+  visible.value = false; await settle();
+  target.value = 'export'; entry.value++; visible.value = true; await settle();
+  expect(host.querySelector('.data-tabs [aria-current="page"]')?.textContent).toBe('导出');
+  expect(host.querySelector<HTMLInputElement>('.file-picker input')?.value).toBe('/words.xlsx');
 });
 
 test('running task blocks close and exposes cancellation independently', async () => {

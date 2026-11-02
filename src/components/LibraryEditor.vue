@@ -46,18 +46,13 @@ defineExpose({ requestClose, saving });
 </script>
 
 <template>
-  <EditorDialog :title="library ? '编辑词库' : '新建词库'" @close="requestClose">
-    <form class="editor-form" @submit.prevent="save()" @keydown="shortcut">
+  <EditorDialog :title="library ? '编辑词库' : '新建词库'" :busy="saving" @close="requestClose">
+    <div v-if="leaving" class="dialog-decision"><p>词库有未保存修改，离开后草稿会丢失。</p><p v-if="error" class="error" role="alert">{{ error }}</p><div class="form-actions"><button :disabled="saving" @click="save(true)">保存并离开</button><button class="danger-button" :disabled="saving" @click="emit('close')">放弃修改</button><button class="secondary-button" :disabled="saving" @click="leaving = false; emit('continueEditing')">继续编辑</button></div></div>
+    <form v-else class="editor-form" @submit.prevent="save()" @keydown="shortcut">
       <p v-if="error" class="error" role="alert">{{ error }}</p>
       <label>词库名称<input v-model="form.name" autofocus required maxlength="200" /></label>
       <label>描述<textarea v-model="form.description" rows="4" /></label>
       <label class="inline-label"><input v-model="form.archived" type="checkbox" />归档（保留内容）</label>
-      <div v-if="leaving" class="unsaved" role="alert">
-        <p>有未保存的词库修改。</p>
-        <button type="button" :disabled="saving" @click="save(true)">保存并离开</button>
-        <button type="button" @click="emit('close')">放弃修改</button>
-        <button type="button" @click="leaving = false; emit('continueEditing')">继续编辑</button>
-      </div>
       <div class="form-actions"><button :disabled="saving">{{ saving ? '保存中…' : '保存词库' }}</button><button type="button" @click="requestClose">取消</button></div>
     </form>
   </EditorDialog>

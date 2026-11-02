@@ -37,6 +37,16 @@ body {
   margin:0;
 }
 
+#app { position: relative; min-height: 100vh; }
+.page-enter-active, .page-leave-active { transition: opacity 180ms ease; }
+.page-enter-from, .page-leave-to { opacity: 0; }
+.page-leave-active { position: absolute; inset: 0; width: 100%; pointer-events: none; }
+.diagnostics-page { min-height: 100vh; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+  .drawer-enter-from, .drawer-leave-to, .dialog-enter-from .editor-dialog, .dialog-leave-to .editor-dialog { transform: none !important; }
+}
+
 button,input {
   font:inherit;
 }
@@ -56,7 +66,13 @@ button {
   border-radius:7px;
   padding:10px 16px;
   cursor:pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, box-shadow 140ms ease, transform 120ms ease;
 }
+
+button:hover:not(:disabled) { filter: brightness(.94); }
+button:active:not(:disabled) { transform: translateY(1px); }
+input:not([type=checkbox]), textarea, select { transition: border-color 140ms ease, box-shadow 140ms ease; }
+input:focus-visible, textarea:focus-visible, select:focus-visible { border-color: #527f66; }
 
 button:disabled {
   opacity:.5;

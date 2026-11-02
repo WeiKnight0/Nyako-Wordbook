@@ -32,6 +32,10 @@ test('failed saves preserve draft and dirty close offers all choices', async () 
   expect(button('保存并离开')).toBeTruthy();
   expect(button('放弃修改')).toBeTruthy();
   expect(button('继续编辑')).toBeTruthy();
+  expect(host.querySelector('form')).toBeNull();
+  expect(host.querySelector('.dialog-decision [role="alert"]')?.textContent).toContain('磁盘已满');
+  button('继续编辑').click(); await settle();
+  expect(host.querySelector<HTMLTextAreaElement>('[aria-label="义项 1"]')!.value).toBe('本地修改');
 });
 
 test('conflict compares latest content and reload is explicit', async () => {
