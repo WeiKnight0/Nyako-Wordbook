@@ -86,6 +86,12 @@ fn replace(temporary: &Path, target: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
+#[cfg(not(windows))]
+fn replace(temporary: &Path, target: &Path) -> Result<(), AppError> {
+    std::fs::rename(temporary, target)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,10 +120,4 @@ mod tests {
         publish(&temporary, &target, Some(&expected)).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"new-complete");
     }
-}
-
-#[cfg(not(windows))]
-fn replace(temporary: &Path, target: &Path) -> Result<(), AppError> {
-    std::fs::rename(temporary, target)?;
-    Ok(())
 }
