@@ -55,8 +55,12 @@ export const partsOfSpeech = [
   ['noun', '名词'], ['godan_verb', '五段动词'], ['ichidan_verb', '一段动词'],
   ['suru_verb', 'サ变动词'], ['kuru_verb', 'カ变动词'], ['i_adjective', 'い形容词'],
   ['na_adjective', 'な形容词'], ['adverb', '副词'], ['particle', '助词'],
-  ['expression', '表达'], ['other', '其他'],
+  ['expression', '表达'], ['other', '其他'], ['intransitive', '自动词'], ['transitive', '他动词'],
 ] as const;
+
+export const verbForms = partsOfSpeech.filter(([code]) => ['godan_verb', 'ichidan_verb', 'suru_verb', 'kuru_verb'].includes(code));
+export const otherPartsOfSpeech = partsOfSpeech.filter(([code]) => ![...verbForms.map(([form]) => form), 'intransitive', 'transitive'].includes(code));
+export function posLabels(pos: string[]): string { return partsOfSpeech.filter(([code]) => pos.includes(code)).map(([, label]) => label).join(' / '); }
 
 /** @description 为用户录入提供可修正的日语拍数提示。 @param kana 单个读音。 @throws 无。 */
 export function moraHint(kana: string): number {

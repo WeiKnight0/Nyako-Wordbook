@@ -27,6 +27,7 @@ const libraryEditor = ref<InstanceType<typeof LibraryEditor>>();
 const showDetail = ref(false);
 function openWord(id: string) { showDetail.value = true; void select(id); }
 function closeDetail() { showDetail.value = false; }
+function detailEntered() { document.querySelector<HTMLElement>('[aria-label="词条详情"]')?.focus(); }
 function detailExited() { document.querySelector<HTMLElement>('[aria-label="正式词条列表"], [aria-label="演示词条列表"]')?.focus(); }
 function closeConfirmation() { if (!busy.value) confirmation.value = undefined; }
 const searchInput = ref<HTMLInputElement>();
@@ -157,12 +158,12 @@ defineExpose({ modal });
         <div class="filters">
           <label>JLPT<select v-model="query.jlpt" @change="schedule"><option :value="null">全部</option><option v-for="level in ['N5','N4','N3','N2','N1']" :key="level">{{ level }}</option></select></label>
           <label>词性<select v-model="query.pos" @change="schedule"><option :value="null">全部</option><option v-for="[code, label] in partsOfSpeech" :key="code" :value="code">{{ label }}</option></select></label>
-          <label>卡片状态<select v-model="query.state" @change="schedule"><option :value="null">全部</option><option v-for="state in ['new','learning','review','relearning']" :key="state">{{ state }}</option></select></label>
-          <label>排序<select v-model="query.sort" @change="schedule"><option value="updated_at">更新时间</option><option value="kanji">写法</option><option value="kana">读音</option><option value="due_at">下次复习</option></select></label>
         </div>
-        <details class="advanced-filters"><summary>更多筛选</summary><div class="filters">
-          <label>到期<select v-model="query.due" @change="schedule"><option :value="null">全部</option><option :value="true">已到期</option><option :value="false">未到期或未安排</option></select></label>
+        <details class="advanced-filters"><summary>更多筛选与排序</summary><div class="filters">
+          <label>排序<select v-model="query.sort" @change="schedule"><option value="updated_at">更新时间</option><option value="kanji">写法</option><option value="kana">读音</option><option value="due_at">下次复习</option></select></label>
           <label>方向<select v-model="query.descending" @change="schedule"><option :value="true">降序</option><option :value="false">升序</option></select></label>
+          <label>卡片状态<select v-model="query.state" @change="schedule"><option :value="null">全部</option><option value="new">新词</option><option value="learning">学习中</option><option value="review">复习中</option><option value="relearning">重新学习</option></select></label>
+          <label>到期<select v-model="query.due" @change="schedule"><option :value="null">全部</option><option :value="true">已到期</option><option :value="false">未到期或未安排</option></select></label>
         </div></details>
         <div class="filter-chips">
           <button v-if="query.text" class="text-button" @click="query.text = ''; schedule()">关键词：{{ query.text }} ×</button>
@@ -187,7 +188,7 @@ defineExpose({ modal });
         </div>
       </section>
     </main>
-    <Transition name="drawer" @after-leave="detailExited"><WordDetailView v-if="showDetail && (detail || detailLoading)" :word="detailLoading ? undefined : detail" :libraries="libraries" :readonly="demo" @edit="editWord" @delete="deleteCurrentWord" @close="closeDetail" /></Transition>
+    <Transition name="drawer" @after-enter="detailEntered" @after-leave="detailExited"><WordDetailView v-if="showDetail && (detail || detailLoading)" :word="detailLoading ? undefined : detail" :libraries="libraries" :readonly="demo" @edit="editWord" @delete="deleteCurrentWord" @close="closeDetail" /></Transition>
     <Transition name="dialog"><LibraryEditor v-if="libraryDialog" ref="libraryEditor" :library="editingLibrary" @close="closeEditor" @saved="savedLibrary" @continue-editing="exitRequested = false" /></Transition>
     <Transition name="dialog"><WordEditor v-if="wordDialog" ref="editor" :word="editingWord" :libraries="libraries" :library-id="query.library_id" @close="closeEditor" @saved="savedWord" @continue-editing="exitRequested = false" /></Transition>
     <Transition name="dialog"><EditorDialog v-if="confirmation" :title="confirmation.title" :busy="busy" @close="closeConfirmation"><div class="editor-form"><p v-if="error" class="error" role="alert">{{ error }}</p><p>{{ confirmation.message }}</p><p v-if="confirmation.stage === 2" class="error">第二次确认：此操作将永久删除上述数据。</p><button class="danger-button" :disabled="busy" @click="confirm">{{ confirmation.second && confirmation.stage === 1 ? '我已了解，继续确认' : '确认执行' }}</button><button :disabled="busy" @click="confirmation = undefined">取消</button></div></EditorDialog></Transition>

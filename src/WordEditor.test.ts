@@ -102,6 +102,45 @@ test('blank writing cannot be saved', async () => {
   expect(mocks.vocabulary).not.toHaveBeenCalled();
 });
 
+test('verb form and transitivity are separate, exclusive, and optional', async () => {
+  const initial = word();
+  initial.content.pos = ['godan_verb'];
+  mocks.vocabulary.mockImplementation(request => Promise.resolve({ ...initial, content: request.content, revision: 2 }));
+  app = createApp(WordEditor, { word: initial, libraries: [], libraryId: null }); app.mount(host);
+  expect(host.querySelector<HTMLInputElement>('input[value="godan_verb"]')!.checked).toBe(true);
+  expect(host.querySelector<HTMLInputElement>('input[value="intransitive"]')!.checked).toBe(false);
+  const intr = host.querySelector<HTMLInputElement>('input[value="intransitive"]')!;
+  intr.checked = true; intr.dispatchEvent(new Event('change', { bubbles: true })); await settle();
+  const trans = host.querySelector<HTMLInputElement>('input[value="transitive"]')!;
+  trans.checked = true; trans.dispatchEvent(new Event('change', { bubbles: true })); await settle();
+  host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await settle();
+  expect(mocks.vocabulary.mock.calls[0]![0].content.pos).toEqual(['godan_verb', 'transitive']);
+});
+
+test('editing an existing word preserves multiple verb forms', async () => {
+  const initial = word();
+  initial.content.pos = ['godan_verb', 'suru_verb'];
+  mocks.vocabulary.mockImplementation(request => Promise.resolve({ ...initial, content: request.content, revision: 2 }));
+  app = createApp(WordEditor, { word: initial, libraries: [], libraryId: null }); app.mount(host);
+  expect(host.querySelector<HTMLInputElement>('input[value="godan_verb"]')!.checked).toBe(true);
+  expect(host.querySelector<HTMLInputElement>('input[value="suru_verb"]')!.checked).toBe(true);
+  editMeaning('猫咪');
+  host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await settle();
+  expect(mocks.vocabulary.mock.calls[0]![0].content.pos).toEqual(['godan_verb', 'suru_verb']);
+});
+
+test('existing examples remain visible and retained when other optional sections stay closed', async () => {
+  const initial = word();
+  initial.content.examples.push({ id: crypto.randomUUID(), sense_id: null, jp: '猫です。', cn: '是猫。' });
+  mocks.vocabulary.mockImplementation(request => Promise.resolve({ ...initial, content: request.content, revision: 2 }));
+  app = createApp(WordEditor, { word: initial, libraries: [], libraryId: null }); app.mount(host);
+  expect(host.querySelector<HTMLDetailsElement>('.editor-more')!.open).toBe(true);
+  expect(host.querySelectorAll<HTMLDetailsElement>('.editor-more')[1]!.open).toBe(false);
+  editMeaning('猫咪');
+  host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await settle();
+  expect(mocks.vocabulary.mock.calls[0]![0].content.examples[0].jp).toBe('猫です。');
+});
+
 test('late candidate response is ignored after input changes and pending lookup is cancelled on unmount', async () => {
   vi.useFakeTimers();
   let resolve!: (page: unknown) => void;

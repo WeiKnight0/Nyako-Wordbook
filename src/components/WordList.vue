@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import type { SelectedWord, WordRow } from '../vocabulary';
+import { posLabels, type SelectedWord, type WordRow } from '../vocabulary';
 const props = defineProps<{ words: WordRow[]; activeId: string; selected: SelectedWord[]; loading: boolean; readonly?: boolean }>();
 const emit = defineEmits<{ select: [id: string]; toggle: [word: WordRow]; range: [words: WordRow[]]; open: [] }>();
 const viewport = ref<HTMLElement>();
@@ -50,11 +50,11 @@ function scroll(event: Event) { top.value = (event.target as HTMLElement).scroll
   <div ref="viewport" class="formal-viewport" role="listbox" :aria-label="readonly ? '演示词条列表' : '正式词条列表'" :aria-multiselectable="!readonly" :aria-activedescendant="visible.some(word => word.id === activeId) ? `formal-${activeId}` : undefined" :aria-busy="loading" tabindex="0" @keydown="key" @scroll="scroll">
     <div :style="{ height: `${words.length * height}px`, position: 'relative' }">
       <div :style="{ transform: `translateY(${start * height}px)` }">
-        <div v-for="word in visible" :id="`formal-${word.id}`" :key="word.id" class="formal-row" :class="{ selected: activeId === word.id }" role="option" :aria-selected="selected.some(item => item.id === word.id)" @click="activate(word.id)">
+        <div v-for="word in visible" :id="`formal-${word.id}`" :key="word.id" class="formal-row" :class="{ selected: activeId === word.id, checked: selected.some(item => item.id === word.id) }" role="option" :aria-selected="selected.some(item => item.id === word.id)" @click="activate(word.id)">
           <input v-if="!readonly" type="checkbox" :aria-label="`选择 ${word.kanji || word.kana}`" :checked="selected.some(item => item.id === word.id)" @click.stop @change="emit('toggle', word)" /><span v-else aria-hidden="true"></span>
           <div><strong lang="ja">{{ word.kanji || word.kana }}</strong><small lang="ja">{{ word.kana }}</small></div>
           <div class="row-meaning">{{ word.meaning }}<small v-if="word.sense_count > 1">另有 {{ word.sense_count - 1 }} 项</small></div>
-          <div class="row-meta"><small>{{ word.jlpt || 'JLPT 未知' }} · {{ word.card_state || '无卡片' }}</small><small>{{ word.pos.join(' / ') }}</small><small>{{ word.suspended ? '已暂停 · ' : '' }}{{ word.buried_until ? '已埋藏 · ' : '' }}{{ word.due_at ? new Date(word.due_at).toLocaleString() : '未安排复习' }}</small></div>
+          <div class="row-meta"><small v-if="word.jlpt">{{ word.jlpt }}</small><small v-if="word.pos.length">{{ posLabels(word.pos) }}</small></div>
         </div>
       </div>
     </div>

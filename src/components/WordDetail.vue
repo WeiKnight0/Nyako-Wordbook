@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { partsOfSpeech, type Library, type WordDetail } from '../vocabulary';
+import { posLabels, type Library, type WordDetail } from '../vocabulary';
 const props = defineProps<{ word?: WordDetail; libraries: Library[]; readonly?: boolean }>();
-const partLabels = computed(() => partsOfSpeech.filter(([code]) => props.word?.content.pos.includes(code)).map(([, label]) => label).join(' / '));
+const partLabels = computed(() => posLabels(props.word?.content.pos || []));
 const memberships = computed(() => props.libraries.filter(library => props.word?.content.library_ids.includes(library.id)).map(library => library.name).join(' / ') || '未分类');
 const emit = defineEmits<{ edit: []; delete: []; close: [] }>();
 function close(event?: KeyboardEvent) {

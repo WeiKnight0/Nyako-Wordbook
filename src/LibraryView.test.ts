@@ -51,6 +51,21 @@ test('word selection opens a full-list drawer and its left handle closes it', as
   expect(host.querySelector('.formal-row')).not.toBeNull();
 });
 
+test('list shows readable verb labels and keeps advanced filters collapsed', async () => {
+  const id = crypto.randomUUID();
+  mocks.vocabulary.mockImplementation(request => Promise.resolve(request.operation === 'list_words'
+    ? { words: [{ id, kanji: '開く', kana: 'あく', meaning: '开', pos: ['godan_verb', 'intransitive'], sense_count: 1, revision: 1, jlpt: 'N4', card_state: 'new' }], total: 1, next_cursor: null }
+    : request.operation === 'get_word'
+      ? { content: { id, kanji: '開く', kana: 'あく', jlpt: 'N4', pos: ['godan_verb', 'intransitive'], pitches: [], senses: [{ id: 'sense', meaning: '开' }], examples: [], library_ids: [], note: '' }, revision: 1 }
+      : []));
+  app.unmount(); app = createApp(LibraryView); app.mount(host); await settle();
+  expect(host.querySelector('.formal-row .row-meta')?.textContent).toContain('五段动词 / 自动词');
+  expect(host.querySelector('.formal-row .row-meta')?.textContent).not.toContain('无卡片');
+  expect(host.querySelector('.advanced-filters')?.hasAttribute('open')).toBe(false);
+  host.querySelector<HTMLElement>('.formal-row')!.click(); await settle();
+  expect(host.querySelector('.detail-meta')?.textContent).toContain('五段动词 / 自动词');
+});
+
 test('detail delete previews impact, requires two confirmations, and closes after deletion', async () => {
   const id = crypto.randomUUID();
   let deleted = false;
