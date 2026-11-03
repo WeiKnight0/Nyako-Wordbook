@@ -5,6 +5,11 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing tag to rebuild and publish, such as v0.1.0 (leave empty for validation)'
+        required: false
+        type: string
 permissions:
   contents: read
 jobs:
@@ -16,12 +21,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Check release version
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
           version=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          test "v${version}" = "$GITHUB_REF_NAME"
+          test "v${version}" = "$RELEASE_TAG"
+          test "$(git tag --points-at HEAD --list "$RELEASE_TAG")" = "$RELEASE_TAG"
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -50,7 +60,7 @@ jobs:
             src-tauri/target/release/bundle/**/*.rpm
           if-no-files-found: error
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
     needs: desktop
     runs-on: ubuntu-24.04
     permissions:
@@ -70,6 +80,16 @@ jobs:
           test "$(find release-assets -type f -name '*.dmg' | wc -l)" -ge 1
           test "$(find release-assets -type f -name '*.deb' | wc -l)" -ge 1
       - name: Publish release
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release-assets/* --repo "$GITHUB_REPOSITORY" --title "NyakoWordbook $GITHUB_REF_NAME" --generate-notes --verify-tag
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          mapfile -d '' assets < <(find release-assets -type f \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' \) -print0)
+          test "${#assets[@]}" -ge 3
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --title "NyakoWordbook $RELEASE_TAG" --generate-notes --verify-tag
+          fi
