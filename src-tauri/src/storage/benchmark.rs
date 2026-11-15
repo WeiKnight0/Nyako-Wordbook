@@ -4,7 +4,7 @@ use rusqlite::Connection;
 use serde_json::json;
 use std::{path::Path, time::Instant};
 
-fn fixture(conn: &mut Connection, count: u32) -> Result<(), AppError> {
+fn fixture(conn: &mut Connection, count: u32, distribution: &str) -> Result<(), AppError> {
     query::register(conn)?;
     let tx = conn.transaction()?;
     tx.execute_batch(&format!(
@@ -14,14 +14,10 @@ fn fixture(conn: &mut Connection, count: u32) -> Result<(), AppError> {
          INSERT INTO libraries(id,name,created_at,updated_at) VALUES
          ('10000000-0000-4000-8000-000000000000','基准主库',1,1),
          ('10000000-0000-4000-8000-000000000001','共享词库',1,1);
-         INSERT INTO tags(id,name) VALUES
-         ('20000000-0000-4000-8000-000000000000','常用'),
-         ('20000000-0000-4000-8000-000000000001','日语'),
-         ('20000000-0000-4000-8000-000000000002','基准');
          INSERT INTO words(id,kanji,kana,jlpt,note,search_text,created_at,updated_at)
-         SELECT id,CASE WHEN i%5<>0 THEN '仕事'||i END,'はたらく'||i,'N'||(i%5+1),
+         SELECT id,CASE WHEN i%5<>0 THEN '仕事'||i ELSE 'はたらく'||i END,'はたらく'||i,'N'||(i%5+1),
          CASE WHEN i%1000=0 THEN '罕见备注' ELSE '日常工作' END,
-         nyako_normalize(coalesce(CASE WHEN i%5<>0 THEN '仕事'||i END,'')||char(10)||'はたらく'||i||char(10)||'工作学习'||i||char(10)||'劳动生活'||i||char(10)||CASE WHEN i%1000=0 THEN '罕见备注' ELSE '日常工作' END),1,i+1 FROM fixture;
+         nyako_normalize(CASE WHEN i%5<>0 THEN '仕事'||i ELSE 'はたらく'||i END||char(10)||'はたらく'||i||char(10)||'工作学习'||i||char(10)||'劳动生活'||i||char(10)||CASE WHEN i%1000=0 THEN '罕见备注' ELSE '日常工作' END),1,i+1 FROM fixture;
          INSERT INTO senses(id,word_id,position,meaning)
          SELECT printf('30000000-0000-4000-8000-%012x',2*i),id,0,'工作学习'||i FROM fixture UNION ALL
          SELECT printf('30000000-0000-4000-8000-%012x',2*i+1),id,1,'劳动生活'||i FROM fixture;
@@ -29,9 +25,9 @@ fn fixture(conn: &mut Connection, count: u32) -> Result<(), AppError> {
          SELECT printf('40000000-0000-4000-8000-%012x',2*i),id,printf('30000000-0000-4000-8000-%012x',2*i),0,'毎日働く','每天工作' FROM fixture UNION ALL
          SELECT printf('40000000-0000-4000-8000-%012x',2*i+1),id,printf('30000000-0000-4000-8000-%012x',2*i+1),1,'生活する','生活' FROM fixture;
          INSERT INTO word_pos SELECT id,'noun' FROM fixture;
-         INSERT INTO word_tags SELECT f.id,t.id FROM fixture f CROSS JOIN tags t;
          INSERT INTO library_words SELECT '10000000-0000-4000-8000-000000000000',id,1 FROM fixture WHERE i%10<>0;
-         INSERT INTO library_words SELECT '10000000-0000-4000-8000-000000000001',id,1 FROM fixture WHERE i%2=0;
+         INSERT INTO library_words SELECT '10000000-0000-4000-8000-000000000001',id,1 FROM fixture
+         WHERE ('{distribution}'='shared' AND i%2=0) OR ('{distribution}'='distributed' AND i%10=0);
          INSERT INTO cards(id,word_id,card_type,state,due_at,scheduler_version,parameter_set_id,eligible_since)
          SELECT printf('50000000-0000-4000-8000-%012x',i),id,'recognition',CASE WHEN i%3=0 THEN 'new' ELSE 'review' END,
          CASE i%3 WHEN 0 THEN NULL WHEN 1 THEN 1 ELSE 4102444800000 END,'6.6.2','fsrs6-default',1 FROM fixture;
@@ -51,7 +47,6 @@ fn verify(conn: &Connection, count: u32) -> Result<(), AppError> {
         ("words", 1),
         ("senses", 2),
         ("examples", 2),
-        ("word_tags", 3),
         ("cards", 1),
         ("review_events", 5),
     ] {
@@ -98,8 +93,6 @@ fn base() -> WordQuery {
         text: String::new(),
         library_id: None,
         unclassified: false,
-        tag_ids: vec![],
-        tags_all: true,
         jlpt: None,
         pos: None,
         state: None,
@@ -117,7 +110,7 @@ pub fn run(root: &Path, count: u32) -> Result<(), AppError> {
 }
 
 /// @description 为独立验收生成指定分布并按需测量生产查询。
-/// @param root 标记数据根；count 词数；distribution shared 或 distributed；prepare_only 仅构造。
+/// @param root 标记数据根；count 词数；distribution shared 为共享成员，distributed 为互斥词库；prepare_only 仅构造。
 /// @throws 返回夹具、目录、数据库或查询错误。
 pub fn run_mode(
     root: &Path,
@@ -126,7 +119,9 @@ pub fn run_mode(
     prepare_only: bool,
 ) -> Result<(), AppError> {
     if !["shared", "distributed"].contains(&distribution) {
-        return Err(AppError::validation("未知标签分布"));
+        return Err(AppError::validation(
+            "未知词库成员分布，应为 shared 或 distributed",
+        ));
     }
     if !root.is_absolute() || !root.join(".nyako-acceptance").is_file() || count == 0 {
         return Err(AppError::validation(
@@ -139,47 +134,20 @@ pub fn run_mode(
     let existing: u32 = conn.query_row("SELECT count(*) FROM words", [], |r| r.get(0))?;
     let started = Instant::now();
     if existing == 0 {
-        fixture(&mut conn, count)?;
-        if distribution == "distributed" {
-            conn.execute_batch("BEGIN;
-                DELETE FROM word_tags;
-                WITH RECURSIVE n(i) AS (SELECT 3 UNION ALL SELECT i+1 FROM n WHERE i<202)
-                INSERT INTO tags SELECT printf('20000000-0000-4000-8000-%012x',i),'分布标签'||i FROM n;
-                INSERT INTO word_tags SELECT id,'20000000-0000-4000-8000-000000000000' FROM words;
-                INSERT INTO word_tags SELECT id,printf('20000000-0000-4000-8000-%012x',3+(rowid%100)) FROM words;
-                INSERT INTO word_tags SELECT id,printf('20000000-0000-4000-8000-%012x',103+((rowid/100)%100)) FROM words;
-                COMMIT; ANALYZE;")?;
-        }
+        fixture(&mut conn, count, distribution)?;
         std::fs::write(
             root.join(".nyako-fixture"),
-            format!("v2:{count}:{distribution}"),
+            format!("v3:{count}:{distribution}"),
         )?;
     }
-    if std::fs::read_to_string(root.join(".nyako-fixture"))? != format!("v2:{count}:{distribution}")
+    if std::fs::read_to_string(root.join(".nyako-fixture"))? != format!("v3:{count}:{distribution}")
     {
         return Err(AppError::validation("目录包含不同分布的夹具"));
     }
     verify(&conn, count)?;
-    if std::env::var_os("NYAKO_BENCHMARK_COMPARE").is_some() {
-        for (name, sql) in [
-            ("exists", "SELECT count(*) FROM words w WHERE EXISTS(SELECT 1 FROM word_tags t WHERE t.word_id=w.id AND t.tag_id=?1) AND EXISTS(SELECT 1 FROM word_tags t WHERE t.word_id=w.id AND t.tag_id=?2)"),
-            ("intersection", "SELECT count(*) FROM words w WHERE w.id IN (SELECT word_id FROM word_tags WHERE tag_id=?1 INTERSECT SELECT word_id FROM word_tags WHERE tag_id=?2)"),
-            ("group", "SELECT count(*) FROM words w WHERE w.id IN (SELECT word_id FROM word_tags WHERE tag_id IN (?1,?2) GROUP BY word_id HAVING count(*)=2)"),
-        ] {
-            let ids = ["20000000-0000-4000-8000-000000000000", if distribution == "shared" { "20000000-0000-4000-8000-000000000001" } else { "20000000-0000-4000-8000-000000000003" }];
-            let mut times = Vec::new();
-            for _ in 0..100 {
-                let start = Instant::now();
-                let _: i64 = conn.query_row(sql, ids, |row| row.get(0))?;
-                times.push(start.elapsed().as_secs_f64() * 1000.0);
-            }
-            times.sort_by(f64::total_cmp);
-            println!("{}", json!({"compare":name,"p50_ms":times[49],"p95_ms":times[94]}));
-        }
-    }
     println!(
         "{}",
-        json!({"fixture_version":2,"distribution":distribution,"fixture_words":count,"events":count*5,"database_bytes":std::fs::metadata(root.join("data/main.sqlite3"))?.len(),"prepare_seconds":started.elapsed().as_secs_f64(),"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"sqlite":rusqlite::version(),"durability":"WAL/FULL","samples":100,"cache":"OS file cache uncontrolled"})
+        json!({"fixture_version":3,"membership_distribution":distribution,"fixture_words":count,"senses":u64::from(count)*2,"examples":u64::from(count)*2,"events":u64::from(count)*5,"libraries":2,"memberships":conn.query_row("SELECT count(*) FROM library_words", [], |row| row.get::<_, i64>(0))?,"shared_words":conn.query_row("SELECT count(*) FROM (SELECT word_id FROM library_words GROUP BY word_id HAVING count(*)>1)", [], |row| row.get::<_, i64>(0))?,"database_bytes":std::fs::metadata(root.join("data/main.sqlite3"))?.len(),"prepare_seconds":started.elapsed().as_secs_f64(),"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"sqlite":rusqlite::version(),"durability":"WAL/FULL","samples":100,"cache":"OS file cache uncontrolled"})
     );
     drop(conn);
     if prepare_only {
@@ -205,42 +173,21 @@ pub fn run_mode(
         query.text = text.into();
         cases.push((format!("search/{text}"), query, false));
     }
-    for all in [true, false] {
+    for (name, library) in [
+        ("main", "10000000-0000-4000-8000-000000000000"),
+        ("secondary", "10000000-0000-4000-8000-000000000001"),
+    ] {
         let mut query = base();
-        query.tag_ids = vec![
-            "20000000-0000-4000-8000-000000000000".into(),
-            if distribution == "distributed" {
-                "20000000-0000-4000-8000-000000000003"
-            } else {
-                "20000000-0000-4000-8000-000000000001"
-            }
-            .into(),
-        ];
-        query.tags_all = all;
-        cases.push((format!("tags/{all}"), query.clone(), false));
-        query.library_id = Some("10000000-0000-4000-8000-000000000000".into());
-        query.jlpt = Some("N5".into());
+        query.library_id = Some(library.into());
+        cases.push((format!("library/{name}"), query.clone(), false));
+        query.jlpt = Some("N1".into());
         query.due = Some(true);
         query.pos = Some("noun".into());
-        cases.push((format!("compound/{all}"), query, false));
+        cases.push((format!("compound/{name}"), query, false));
     }
-    if distribution == "distributed" {
-        for (name, ids) in [
-            ("overlap", [3, 103]),
-            ("disjoint", [3, 4]),
-            ("missing", [3, 999]),
-        ] {
-            for all in [true, false] {
-                let mut query = base();
-                query.tag_ids = ids
-                    .iter()
-                    .map(|id| format!("20000000-0000-4000-8000-{id:012x}"))
-                    .collect();
-                query.tags_all = all;
-                cases.push((format!("tags/{name}/{all}"), query, false));
-            }
-        }
-    }
+    let mut query = base();
+    query.unclassified = true;
+    cases.push(("library/unclassified".into(), query, false));
     let case_filter = std::env::var("NYAKO_BENCHMARK_CASE").unwrap_or_default();
     for (name, query, later) in cases
         .into_iter()

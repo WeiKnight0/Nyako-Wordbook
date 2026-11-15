@@ -3,7 +3,7 @@ $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.Encoding]::UTF8
 Add-Type -AssemblyName UIAutomationClient
 $DataRoot=(Resolve-Path $DataRoot).Path
-if(!(Test-Path (Join-Path $DataRoot '.nyako-acceptance'))){throw 'Missing acceptance marker'}
+if(!(Test-Path (Join-Path $DataRoot '.nyako-acceptance') -PathType Leaf)){throw 'Missing acceptance marker'}
 $db=Join-Path $DataRoot 'data/main.sqlite3'
 $before=(Get-FileHash $db -Algorithm SHA256).Hash
 $env:NYAKO_ACCEPTANCE_ROOT=$DataRoot

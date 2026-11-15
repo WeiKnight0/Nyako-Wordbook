@@ -1,4 +1,4 @@
-param(
+﻿param(
  [Parameter(Mandatory=$true)][string]$Executable,
  [Parameter(Mandatory=$true)][string]$DataRoot,
  [switch]$DoubleScale
@@ -12,13 +12,14 @@ using System;
 using System.Runtime.InteropServices;
 public class NyakoWindow {
  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int width,int height,uint flags);
+ [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
  [DllImport("user32.dll")] public static extern void mouse_event(uint flags,uint x,uint y,uint data,UIntPtr extra);
 }
 '@
 $Executable=(Resolve-Path $Executable).Path
 $DataRoot=(Resolve-Path $DataRoot).Path
-if(!(Test-Path (Join-Path $DataRoot '.nyako-acceptance'))){throw 'Missing acceptance marker'}
+if(!(Test-Path (Join-Path $DataRoot '.nyako-acceptance') -PathType Leaf)){throw 'Missing acceptance marker'}
 $env:NYAKO_ACCEPTANCE_ROOT=$DataRoot
 Remove-Item Env:NYAKO_ACCEPTANCE_MEASURE -ErrorAction SilentlyContinue
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--force-renderer-accessibility'
@@ -49,7 +50,9 @@ function Click([string]$Name){
  $element=Wait-Element $Name ([Windows.Automation.ControlType]::Button)
  if(!$element.Current.IsEnabled){throw "Disabled $Name"}
  $element.SetFocus()
- $element.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+ $expand=$null
+ if($element.TryGetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$expand)){$expand.Expand()}
+ else{$element.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()}
  Start-Sleep -Milliseconds 250
 }
 function Fill([string]$Name,[string]$Value){
@@ -80,7 +83,9 @@ function Close-App {
 }
 Start-App
 try{
- foreach($name in @('新建词库','新增词条','展开详情','加载下一页')){
+ foreach($name in @('新建词库','新增词条','查看当前词条','加载下一页')){
+  [void][NyakoWindow]::SetForegroundWindow($script:window.Current.NativeWindowHandle)
+  Start-Sleep -Milliseconds 150
   $element=Wait-Element $name ([Windows.Automation.ControlType]::Button)
   $element.SetFocus()
   Start-Sleep -Milliseconds 150
@@ -93,18 +98,27 @@ try{
   [NyakoWindow]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
   Start-Sleep -Milliseconds 300
   $log+=@{case="mouse/$name";bounds=@($rect.Left,$rect.Top,$rect.Width,$rect.Height);double_scale=[bool]$DoubleScale}
-  if($name -in @('新建词库','新增词条')){[void](Wait-Element '取消' ([Windows.Automation.ControlType]::Button));Click '取消'}
+  if($name -in @('新建词库','新增词条')){
+   [void](Wait-Element '取消' ([Windows.Automation.ControlType]::Button));Click '取消'
+   $watch=[Diagnostics.Stopwatch]::StartNew()
+   while(Find-Element '取消' ([Windows.Automation.ControlType]::Button)){
+    if($watch.Elapsed.TotalSeconds -ge 15){throw "Dialog did not close after mouse/$name"}
+    Start-Sleep -Milliseconds 100
+   }
+  }
+  if($name -eq '查看当前词条'){Click '收回词条详情'}
  }
  Click '新增词条'
+ Fill '写法（必填）' '回帰テスト'
  Fill '假名（必填）' 'かいきてすと'
  Fill '义项 1' '原生回归首义项'
  Click '新增义项'
  Fill '义项 2' '第二义项'
+ Click '例句'
  Click '新增例句'
  Fill '日文例句' '毎日働く'
  Fill '中文翻译（可空）' '每天工作'
- Fill '新标签名称' '回归标签'
- Click '明确创建标签'
+ Click '所属词库'
  foreach($library in @('基准主库','共享词库')){
   $box=Wait-Element $library ([Windows.Automation.ControlType]::CheckBox)
   $box.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern).Toggle()
@@ -112,39 +126,56 @@ try{
  Click '保存词条'
  Fill '搜索真实词条' 'かいきてすと'
  Start-Sleep -Milliseconds 500
- $selection=Wait-Element '选择 かいきてすと' ([Windows.Automation.ControlType]::CheckBox)
+ [void](Wait-Element '选择 回帰テスト' ([Windows.Automation.ControlType]::CheckBox))
+ Click '查看当前词条'
+ Click '编辑词条'
+ foreach($field in @(@('写法（必填）','回帰テスト'),@('假名（必填）','かいきてすと'),@('义项 1','原生回归首义项'),@('义项 2','第二义项'),@('日文例句','毎日働く'),@('中文翻译（可空）','每天工作'))){
+  if((Wait-Element $field[0] ([Windows.Automation.ControlType]::Edit)).GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value -cne $field[1]){throw "Saved word mismatch: $($field[0])"}
+ }
+ foreach($library in @('基准主库','共享词库')){
+  if((Wait-Element $library ([Windows.Automation.ControlType]::CheckBox)).GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -ne [Windows.Automation.ToggleState]::On){throw "Missing saved membership: $library"}
+ }
+ Click '取消'
+ Click '收回词条详情'
+ $selection=Wait-Element '选择 回帰テスト' ([Windows.Automation.ControlType]::CheckBox)
  $selection.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern).Toggle()
  $target=Wait-Element '目标词库' ([Windows.Automation.ControlType]::ComboBox)
- $target.GetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
- $option=Wait-Element '共享词库' ([Windows.Automation.ControlType]::ListItem)
- $option.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern).Select()
+ $target.SetFocus()
+ Add-Type -AssemblyName System.Windows.Forms
+ [Windows.Forms.SendKeys]::SendWait('{END}')
+ Start-Sleep -Milliseconds 200
+ if($target.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value -cne '共享词库'){throw 'Target library selection failed'}
  Click '移出词库'
- $selection=Wait-Element '选择 かいきてすと' ([Windows.Automation.ControlType]::CheckBox)
+ $selection=Wait-Element '选择 回帰テスト' ([Windows.Automation.ControlType]::CheckBox)
  $selection.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern).Toggle()
  Click '加入词库'
- $selection=Wait-Element '选择 かいきてすと' ([Windows.Automation.ControlType]::CheckBox)
+ $selection=Wait-Element '选择 回帰テスト' ([Windows.Automation.ControlType]::CheckBox)
  $selection.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern).Toggle()
  Click '永久删除词条…'
  Click '取消'
  Click '永久删除词条…'
  Click '我已了解，继续确认'
  Click '确认执行'
+ Start-Sleep -Milliseconds 500
+ if(Find-Element '选择 回帰テスト' ([Windows.Automation.ControlType]::CheckBox)){throw 'Deleted word remains in list'}
+ $text=$script:window.FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.Condition]::TrueCondition)|ForEach-Object {$_.Current.Name}
+ if('0 个匹配词条' -notin $text){throw 'Deleted word still matches search'}
  Fill '搜索真实词条' ''
  Start-Sleep -Milliseconds 500
- $log+=@{case='word/create/two-senses/example/tag/shared/batch-remove-add/delete-cancel/two-confirmations';passed=$true}
+ $log+=@{case='word/create/writing/two-senses/example/shared/batch-remove-add/delete-cancel/two-confirmations';passed=$true}
  Click '新建词库'
- Fill '词库名称' '回归词库甲'
+ Fill '词库名称 最多 100 个字符' '回归词库甲'
  Fill '描述' '原生关闭保存与重开验证'
  [void]$script:process.CloseMainWindow()
  [void](Wait-Element '保存并离开' ([Windows.Automation.ControlType]::Button))
  Click '继续编辑'
  if($script:process.HasExited){throw 'Continue editing closed the window'}
- Fill '词库名称' ('错'*101)
+ Fill '词库名称 最多 100 个字符' ('错'*101)
  Click '保存词库'
- [void](Wait-Element '词库名称' ([Windows.Automation.ControlType]::Edit))
+ [void](Wait-Element '词库名称 最多 100 个字符' ([Windows.Automation.ControlType]::Edit))
  $text=$script:window.FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.Condition]::TrueCondition) | ForEach-Object {$_.Current.Name}
  if(($text -join ' ') -notmatch '草稿已保留'){throw 'Failure did not report retained draft'}
- Fill '词库名称' '回归词库甲'
+ Fill '词库名称 最多 100 个字符' '回归词库甲'
  [void]$script:process.CloseMainWindow()
  Click '保存并离开'
  if(!$script:process.WaitForExit(10000)){throw 'Save-and-close did not exit'}
@@ -152,7 +183,7 @@ try{
  Start-App
  [void](Wait-Element '编辑词库 回归词库甲' ([Windows.Automation.ControlType]::Button))
  Click '新建词库'
- Fill '词库名称' '应该放弃的草稿'
+ Fill '词库名称 最多 100 个字符' '应该放弃的草稿'
  [void]$script:process.CloseMainWindow()
  Click '放弃修改'
  if(!$script:process.WaitForExit(10000)){throw 'Discard-and-close did not exit'}
@@ -160,6 +191,7 @@ try{
  Start-App
  if(Find-Element '编辑词库 应该放弃的草稿' ([Windows.Automation.ControlType]::Button)){throw 'Discarded draft was saved'}
  Close-App
+ $log+=@{case='executable';sha256=(Get-FileHash $Executable -Algorithm SHA256).Hash}
  $log|ConvertTo-Json -Depth 5|Set-Content -Encoding UTF8 (Join-Path $DataRoot 'native-results.json')
 }finally{
  if(!$script:process.HasExited){[void]$script:process.CloseMainWindow()}

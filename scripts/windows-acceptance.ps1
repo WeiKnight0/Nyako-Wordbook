@@ -1,4 +1,4 @@
-param(
+﻿param(
  [Parameter(Mandatory=$true)][string]$Executable,
  [Parameter(Mandatory=$true)][string]$DataRoot,
  [ValidateSet('cold','measure','memory')][string]$Scenario='cold',
@@ -11,7 +11,7 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 $Executable=(Resolve-Path $Executable).Path
 $DataRoot=(Resolve-Path $DataRoot).Path
-if(!(Test-Path (Join-Path $DataRoot '.nyako-acceptance'))){throw 'Missing acceptance marker'}
+if(!(Test-Path (Join-Path $DataRoot '.nyako-acceptance') -PathType Leaf)){throw 'Missing acceptance marker'}
 if($Samples -lt 1){throw 'Samples must be positive'}
 $env:NYAKO_ACCEPTANCE_ROOT=$DataRoot
 $env:NYAKO_ACCEPTANCE_TIMING='1'
