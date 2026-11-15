@@ -13,6 +13,7 @@ export function useVocabulary() {
   const words = ref<WordRow[]>([]);
   const detail = ref<WordDetail>();
   const detailLoading = ref(false);
+  const detailError = ref('');
   const activeId = ref('');
   const selected = ref<SelectedWord[]>([]);
   const total = ref(0);
@@ -25,46 +26,72 @@ export function useVocabulary() {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let composing = false;
 
-  async function select(id: string) {
+  function activate(id: string) {
+    if (activeId.value === id) return;
+    ++detailSequence;
     activeId.value = id;
+    detail.value = undefined;
+    detailLoading.value = false;
+    detailError.value = '';
+  }
+
+  async function select(id: string) {
+    if (id === activeId.value && (detailLoading.value || detail.value)) return;
+    activate(id);
+    detailError.value = '';
     detailLoading.value = true;
     const request = ++detailSequence;
     try {
       const result = demo ? demoDetail(id) : await vocabulary<WordDetail>({ operation: 'get_word', id });
       if (request === detailSequence) detail.value = result;
     } catch (cause) {
-      if (request === detailSequence) { detail.value = undefined; error.value = errorMessage(cause); }
+      if (request === detailSequence) { detail.value = undefined; detailError.value = errorMessage(cause); }
     } finally { if (request === detailSequence) detailLoading.value = false; }
   }
 
-  async function search(append = false) {
-    if (!ready.value) return;
+  async function search(append = false, preserve = false): Promise<boolean> {
+    if (!ready.value) return false;
     const request = ++sequence;
+    const snapshot = JSON.parse(JSON.stringify(query.value)) as WordQuery;
+    const target = preserve ? words.value.length : 0;
     loading.value = true;
     error.value = '';
+    detailError.value = '';
     try {
-      const page = demo
-        ? { words: searchDemo(query.value), next_cursor: null }
-        : await vocabulary<WordPage>({ operation: 'list_words', query: JSON.parse(JSON.stringify(query.value)) as WordQuery, cursor: append ? cursor.value : null, limit: 100 });
-      if (request !== sequence) return;
-      const wordsBefore = words.value;
-      words.value = append ? [...new Map([...words.value, ...page.words].map(word => [word.id, word])).values()] : page.words;
-      total.value = demo ? page.words.length : (page as WordPage).total;
-      cursor.value = page.next_cursor;
-      if (!append) {
-        ++detailSequence;
-        const oldIndex = Math.max(0, wordsBefore.findIndex(word => word.id === activeId.value));
-        const id = page.words.find(word => word.id === activeId.value)?.id ?? page.words[Math.min(oldIndex, page.words.length - 1)]?.id;
-        if (id) await select(id);
-        else { activeId.value = ''; detail.value = undefined; detailLoading.value = false; }
+      let next = append ? cursor.value : null;
+      let rows: WordRow[] = [];
+      let count = 0;
+      do {
+        const page: WordPage = demo
+          ? { words: searchDemo(snapshot), next_cursor: null, total: searchDemo(snapshot).length, query_id: 'demo' }
+          : await vocabulary<WordPage>({ operation: 'list_words', query: snapshot, cursor: next, limit: 100 });
+        if (request !== sequence) return false;
+        rows = [...rows, ...page.words];
+        count = page.total;
+        next = page.next_cursor;
+      } while (next && rows.length < target);
+      const oldIndex = Math.max(0, words.value.findIndex(word => word.id === activeId.value));
+      words.value = [...new Map([...(append ? words.value : []), ...rows].map(word => [word.id, word])).values()];
+      total.value = count;
+      cursor.value = next;
+      if (append) return true;
+      ++detailSequence;
+      detail.value = undefined;
+      detailLoading.value = false;
+      activeId.value = rows.find(word => word.id === activeId.value)?.id ?? rows[Math.min(oldIndex, rows.length - 1)]?.id ?? '';
+      if (preserve) {
+        const revisions = new Map(rows.map(word => [word.id, word.revision]));
+        selected.value = selected.value.filter(word => revisions.has(word.id)).map(word => ({ id: word.id, revision: revisions.get(word.id)! }));
       }
-    } catch (cause) { if (request === sequence) error.value = errorMessage(cause); }
+      return true;
+    } catch (cause) { if (request === sequence) error.value = errorMessage(cause); return false; }
     finally { if (request === sequence) loading.value = false; }
   }
 
   function invalidate() {
     ++sequence;
     ++detailSequence;
+    detailLoading.value = false;
     clearTimeout(timer);
     if (selected.value.length) notice.value = '查询条件已变化，已清空原选择。';
     selected.value = [];
@@ -89,9 +116,17 @@ export function useVocabulary() {
     range([word]);
   }
 
-  async function refresh() {
-    libraries.value = demo ? demoLibraries : await vocabulary<Library[]>({ operation: 'libraries' });
-    await search();
+  async function refresh(preserve = false): Promise<boolean> {
+    const request = ++sequence;
+    ++detailSequence;
+    detail.value = undefined;
+    detailLoading.value = false;
+    clearTimeout(timer);
+    const result = demo ? demoLibraries : await vocabulary<Library[]>({ operation: 'libraries' });
+    if (request !== sequence) return false;
+    libraries.value = result;
+    if (query.value.library_id && !libraries.value.some(library => library.id === query.value.library_id)) query.value.library_id = null;
+    return search(false, preserve);
   }
 
   let startupTimer: ReturnType<typeof setTimeout> | undefined;
@@ -105,5 +140,5 @@ export function useVocabulary() {
   }
 
   onBeforeUnmount(() => { clearTimeout(timer); clearTimeout(startupTimer); ++sequence; ++detailSequence; });
-  return { libraries, storage, error, notice, loading, words, detail, detailLoading, activeId, selected, total, cursor, query, ready, select, search, schedule, beginComposition, endComposition, toggle, range, refresh, initialize };
+  return { libraries, storage, error, notice, loading, words, detail, detailLoading, detailError, activeId, selected, total, cursor, query, ready, activate, select, search, schedule, beginComposition, endComposition, toggle, range, refresh, initialize };
 }

@@ -1,21 +1,27 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onActivated, ref, watch } from 'vue';
 import { posLabels, type SelectedWord, type WordRow } from '../vocabulary';
-const props = defineProps<{ words: WordRow[]; activeId: string; selected: SelectedWord[]; loading: boolean; readonly?: boolean }>();
-const emit = defineEmits<{ select: [id: string]; toggle: [word: WordRow]; range: [words: WordRow[]]; open: [] }>();
+const props = defineProps<{ words: WordRow[]; activeId: string; selected: SelectedWord[]; loading: boolean; readonly?: boolean; compact?: boolean; revealActive?: boolean }>();
+const emit = defineEmits<{ select: [id: string]; toggle: [word: WordRow]; range: [words: WordRow[]]; open: [id: string] }>();
 const viewport = ref<HTMLElement>();
 const top = ref(0);
 const height = 72;
 const start = computed(() => Math.max(0, Math.floor(top.value / height) - 4));
 const visible = computed(() => props.words.slice(start.value, start.value + 24));
 let anchor: string | undefined;
-watch(() => props.words[0]?.id, () => {
-  anchor = undefined;
-  top.value = 0;
-  if (viewport.value) viewport.value.scrollTop = 0;
-});
+onActivated(() => { viewport.value!.scrollTop = top.value; });
 watch(() => props.activeId, id => {
-  const index = props.words.findIndex(word => word.id === id);
+  if (props.revealActive) reveal(props.words.findIndex(word => word.id === id));
+}, { flush: 'post' });
+watch(() => props.words.map(word => word.id), (ids, previous) => {
+  if (ids.length !== previous.length) {
+    top.value = Math.min(top.value, Math.max(0, ids.length * height - viewport.value!.clientHeight));
+    viewport.value!.scrollTop = top.value;
+  }
+  // 相同顺序的刷新和追加分页保留滚动；已有词目换位或移除时重新对齐活动项。
+  if (!previous.some((id, index) => id !== ids[index])) return;
+  anchor = undefined;
+  const index = ids.indexOf(props.activeId);
   if (index >= 0) reveal(index);
 }, { flush: 'post' });
 function reveal(index: number) {
@@ -25,11 +31,11 @@ function reveal(index: number) {
   }
   top.value = viewport.value.scrollTop;
 }
-function activate(id: string) { anchor = id; emit('select', id); viewport.value!.focus(); }
+function activate(id: string) { anchor = id; viewport.value!.focus({ preventScroll: true }); emit('open', id); }
 function key(event: KeyboardEvent) {
-  if (event.isComposing || event.repeat || (event.target as HTMLElement).matches('input,textarea,select,button')) return;
+  if (event.isComposing || event.repeat || event.ctrlKey || event.metaKey || event.altKey || (event.target as HTMLElement).closest('input,textarea,select,button,[contenteditable="true"]')) return;
   const index = Math.max(0, props.words.findIndex(word => word.id === props.activeId));
-  if (event.key === 'Enter') { event.preventDefault(); emit('open'); return; }
+  if (event.key === 'Enter') { event.preventDefault(); if (props.words[index]) emit('open', props.words[index]!.id); return; }
   if (event.key === ' ') { event.preventDefault(); if (!props.readonly && props.words[index]) emit('toggle', props.words[index]!); return; }
   if (!['ArrowDown', 'ArrowUp', 'j', 'k'].includes(event.key) || !props.words.length) return;
   event.preventDefault();
@@ -47,7 +53,7 @@ function scroll(event: Event) { top.value = (event.target as HTMLElement).scroll
 </script>
 
 <template>
-  <div ref="viewport" class="formal-viewport" role="listbox" :aria-label="readonly ? '演示词条列表' : '正式词条列表'" :aria-multiselectable="!readonly" :aria-activedescendant="visible.some(word => word.id === activeId) ? `formal-${activeId}` : undefined" :aria-busy="loading" tabindex="0" @keydown="key" @scroll="scroll">
+  <div ref="viewport" class="formal-viewport" :class="{ 'compact-list': compact }" role="listbox" :aria-label="readonly ? '演示词条列表' : '正式词条列表'" :aria-multiselectable="!readonly" :aria-activedescendant="visible.some(word => word.id === activeId) ? `formal-${activeId}` : undefined" :aria-busy="loading" tabindex="0" @keydown="key" @scroll="scroll">
     <div :style="{ height: `${words.length * height}px`, position: 'relative' }">
       <div :style="{ transform: `translateY(${start * height}px)` }">
         <div v-for="word in visible" :id="`formal-${word.id}`" :key="word.id" class="formal-row" :class="{ selected: activeId === word.id, checked: selected.some(item => item.id === word.id) }" role="option" :aria-selected="selected.some(item => item.id === word.id)" @click="activate(word.id)">

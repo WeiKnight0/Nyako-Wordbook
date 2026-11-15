@@ -50,7 +50,7 @@ defineExpose({ requestClose, saving });
     <div v-if="leaving" class="dialog-decision"><p>词库有未保存修改，离开后草稿会丢失。</p><p v-if="error" class="error" role="alert">{{ error }}</p><div class="form-actions"><button :disabled="saving" @click="save(true)">保存并离开</button><button class="danger-button" :disabled="saving" @click="emit('close')">放弃修改</button><button class="secondary-button" :disabled="saving" @click="leaving = false; emit('continueEditing')">继续编辑</button></div></div>
     <form v-else class="editor-form" @submit.prevent="save()" @keydown="shortcut">
       <p v-if="error" class="error" role="alert">{{ error }}</p>
-      <label>词库名称<input v-model="form.name" autofocus required maxlength="200" /></label>
+      <label>词库名称<input v-model="form.name" autofocus required maxlength="100" aria-describedby="library-name-limit" /><small id="library-name-limit">最多 100 个字符</small></label>
       <label>描述<textarea v-model="form.description" rows="4" /></label>
       <label class="inline-label"><input v-model="form.archived" type="checkbox" />归档（保留内容）</label>
       <div class="form-actions"><button :disabled="saving">{{ saving ? '保存中…' : '保存词库' }}</button><button type="button" @click="requestClose">取消</button></div>

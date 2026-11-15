@@ -9,6 +9,7 @@ const data = ref(false);
 const exportSelection = ref<string[]>([]);
 const dataSection = ref<'import' | 'export' | 'backup'>('import');
 const dataEntry = ref(0);
+const vocabularyRevision = ref(0);
 function openData(selected: string[] = [], section: 'import' | 'export' | 'backup' = 'import') {
   exportSelection.value = selected;
   dataSection.value = section;
@@ -18,8 +19,8 @@ function openData(selected: string[] = [], section: 'import' | 'export' | 'backu
 </script>
 
 <template>
-  <Transition name="page"><KeepAlive><DataView v-if="data" :selected="exportSelection" :entry-section="dataSection" :entry="dataEntry" @back="data = false" /></KeepAlive></Transition>
-  <Transition name="page"><LibraryView v-if="!data && !diagnostics" @diagnostics="diagnostics = true" @data="openData" /></Transition>
+  <Transition name="page"><KeepAlive><DataView v-if="data" :selected="exportSelection" :entry-section="dataSection" :entry="dataEntry" @back="data = false" @changed="vocabularyRevision++" /></KeepAlive></Transition>
+  <Transition name="page"><KeepAlive><LibraryView v-if="!data && !diagnostics" :data-revision="vocabularyRevision" @diagnostics="diagnostics = true" @data="openData" /></KeepAlive></Transition>
   <Transition name="page"><div v-if="!data && diagnostics" class="diagnostics-page">
     <button class="return-library" @click="diagnostics = false">返回真实词库</button>
     <DiagnosticsView />

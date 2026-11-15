@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { desktop, errorMessage } from '../api';
 import { useVocabulary } from '../composables/useVocabulary';
@@ -11,11 +11,12 @@ import WordList from '../components/WordList.vue';
 import WordDetailView from '../components/WordDetail.vue';
 import EditorDialog from '../components/EditorDialog.vue';
 
+const props = withDefaults(defineProps<{ dataRevision?: number }>(), { dataRevision: 0 });
 const emit = defineEmits<{ diagnostics: []; data: [selected?: string[], section?: 'import' | 'export' | 'backup'] }>();
 const state = useVocabulary();
 const {
-  libraries, storage, error, notice, loading, words, detail, detailLoading, activeId,
-  selected, total, cursor, query, ready, select, search, schedule,
+  libraries, storage, error, notice, loading, words, detail, detailLoading, detailError, activeId,
+  selected, total, cursor, query, ready, activate, select, search, schedule,
   beginComposition, endComposition, toggle, range, refresh, initialize,
 } = state;
 const libraryDialog = ref(false);
@@ -25,13 +26,79 @@ const editingWord = ref<WordDetail>();
 const editor = ref<InstanceType<typeof WordEditor>>();
 const libraryEditor = ref<InstanceType<typeof LibraryEditor>>();
 const showDetail = ref(false);
-function openWord(id: string) { showDetail.value = true; void select(id); }
-function closeDetail() { showDetail.value = false; }
-function detailEntered() { document.querySelector<HTMLElement>('[aria-label="词条详情"]')?.focus(); }
-function detailExited() { document.querySelector<HTMLElement>('[aria-label="正式词条列表"], [aria-label="演示词条列表"]')?.focus(); }
+const readingMode = ref(true);
+const screenQuery = window.matchMedia?.('(max-width: 1100px)');
+const narrow = ref(screenQuery?.matches ?? false);
+function resizeReader(event: MediaQueryListEvent) {
+  const readerFocused = shell.value?.querySelector('[aria-label="词条详情"]')?.contains(document.activeElement);
+  narrow.value = event.matches; showDetail.value = false;
+  if (readerFocused && !readerVisible.value) void nextTick(detailExited);
+}
+const readerVisible = computed(() => Boolean(activeId.value) && (readingMode.value && !narrow.value || showDetail.value));
+const activeIndex = computed(() => words.value.findIndex(word => word.id === activeId.value));
+const navigating = ref(false);
+const shell = ref<HTMLElement>();
+let active = true;
+function chooseWord(id: string) {
+  activate(id);
+  if (readingMode.value && !narrow.value) void select(id);
+}
+function openWord(id: string) {
+  if (!active) return;
+  readingMode.value = true;
+  showDetail.value = true;
+  void select(id);
+  void nextTick(detailEntered);
+}
+function closeDetail() {
+  showDetail.value = false;
+  if (!narrow.value) readingMode.value = false;
+  void nextTick(detailExited);
+}
+function setReading(value: boolean) {
+  readingMode.value = value; showDetail.value = value && narrow.value && Boolean(activeId.value);
+  if (value && activeId.value) { void select(activeId.value); if (narrow.value) void nextTick(detailEntered); }
+}
+async function navigateWord(direction: -1 | 1) {
+  if (navigating.value || loading.value || detailLoading.value) return;
+  const index = activeIndex.value;
+  const current = activeId.value;
+  navigating.value = true;
+  try {
+    if (direction === 1 && index === words.value.length - 1 && cursor.value && !await search(true)) return;
+    if (activeId.value !== current) return;
+    const word = words.value[index + direction];
+    if (!word) return;
+    await select(word.id);
+  } finally { navigating.value = false; }
+}
+function detailEntered() {
+  if (!active || !showDetail.value) return;
+  const reader = shell.value!.querySelector<HTMLElement>('[aria-label="词条详情"]');
+  reader?.focus({ preventScroll: true });
+  if (narrow.value) reader?.scrollIntoView?.({ block: 'start' });
+}
+function detailExited() { if (active && !showDetail.value && !modal.value) shell.value!.querySelector<HTMLElement>('[role="listbox"]')?.focus({ preventScroll: true }); }
 function closeConfirmation() { if (!busy.value) confirmation.value = undefined; }
 const searchInput = ref<HTMLInputElement>();
 const busy = ref(false);
+const refreshedRevision = ref(props.dataRevision);
+const stale = computed(() => refreshedRevision.value !== props.dataRevision);
+let initialized = false;
+async function refreshChangedData() {
+  if (!active || !initialized || !stale.value || busy.value) return;
+  const revision = props.dataRevision;
+  await action(async () => {
+    if (!await refresh(true)) return;
+    refreshedRevision.value = revision;
+    if (readerVisible.value) await select(activeId.value);
+  });
+  if (active && revision !== props.dataRevision) void refreshChangedData();
+}
+watch(() => props.dataRevision, () => { void refreshChangedData(); });
+watch([loading, activeId, readerVisible], () => { if (!loading.value && active && readerVisible.value) void select(activeId.value); });
+onActivated(() => { active = true; void refreshChangedData(); if (readerVisible.value) void select(activeId.value); });
+onDeactivated(() => { active = false; exitRequested.value = false; });
 const batchTarget = ref('');
 const confirmation = ref<{ title: string; message: string; run: () => Promise<void>; second: boolean; stage: number }>();
 const currentLibrary = computed(() => libraries.value.find(library => library.id === query.value.library_id));
@@ -39,7 +106,7 @@ const modal = computed(() => libraryDialog.value || wordDialog.value || Boolean(
 const demo = import.meta.env.DEV && !desktop;
 let unlisten: (() => void) | undefined;
 
-async function action(run: () => Promise<void>) {
+async function action(run: () => Promise<unknown>) {
   if (busy.value) return;
   busy.value = true; error.value = '';
   try { await run(); }
@@ -70,6 +137,7 @@ async function savedLibrary() {
   if (!exitRequested.value) await action(refresh);
 }
 async function batch(kind: string, target: string | null) {
+  if (stale.value) return;
   await action(async () => {
     await vocabulary<number>({ operation: 'batch', selected: [...selected.value], action: kind, target });
     selected.value = []; await refresh(); notice.value = '已保存所选词条的修改。';
@@ -83,6 +151,7 @@ function deleteLibrary() {
   } };
 }
 async function deleteSelection(selection: { id: string; revision: number }[]) {
+  if (stale.value) return;
   await action(async () => {
     const impact = await vocabulary<DeleteImpact>({ operation: 'delete_impact', selected: selection });
     confirmation.value = { title: '永久删除词条', message: `将永久删除 ${selection.length} 个词条、${impact.memberships} 条成员关系、${impact.cards} 张卡片及 ${impact.events} 条历史事件。建议先到数据管理创建完整备份。此操作不可撤销。`, second: true, stage: 1, run: async () => {
@@ -102,18 +171,21 @@ async function confirm() {
   await action(async () => { await current.run(); confirmation.value = undefined; });
 }
 function shortcuts(event: KeyboardEvent) {
-  if (event.isComposing || event.repeat || modal.value || !(event.ctrlKey || event.metaKey)) return;
+  if (!active || event.isComposing || event.repeat || modal.value || !(event.ctrlKey || event.metaKey)) return;
   if (event.key.toLowerCase() === 'f') { event.preventDefault(); searchInput.value?.focus(); }
   if (event.key.toLowerCase() === 'n') { event.preventDefault(); newWord(); }
 }
 onMounted(async () => {
   window.addEventListener('keydown', shortcuts);
+  screenQuery?.addEventListener('change', resizeReader);
   if (!desktop && !demo) { error.value = '浏览器生产预览没有原生后端，请使用 npm run desktop:dev。'; return; }
   await initialize();
+  initialized = true;
+  void refreshChangedData();
   if (!desktop) return;
   try {
     const stop = await getCurrentWindow().onCloseRequested(event => {
-      if (!(modal.value || busy.value)) return;
+      if (!active || !(modal.value || busy.value)) return;
       event.preventDefault();
       if (wordDialog.value || libraryDialog.value) exitRequested.value = true;
       if (wordDialog.value) editor.value?.requestClose();
@@ -122,7 +194,7 @@ onMounted(async () => {
     });
     if (disposed) stop();
     else unlisten = stop;
-    if (!disposed && ready.value) {
+    if (!disposed && active && ready.value) {
       const { measureAcceptance } = await import('../acceptanceMeasurement');
       await measureAcceptance(state);
     }
@@ -131,14 +203,16 @@ onMounted(async () => {
 let disposed = false;
 onBeforeUnmount(() => {
   disposed = true;
+  active = false;
   window.removeEventListener('keydown', shortcuts);
+  screenQuery?.removeEventListener('change', resizeReader);
   unlisten?.();
 });
 defineExpose({ modal });
 </script>
 
 <template>
-  <div class="shell formal-shell">
+  <div ref="shell" class="shell formal-shell">
     <aside class="sidebar" :inert="modal">
       <div class="brand"><span class="brand-icon">単</span><div>Nyako<span class="brand-sub">WORDBOOK</span></div></div>
       <div class="sidebar-group-label">词条</div>
@@ -152,6 +226,7 @@ defineExpose({ modal });
       <header class="library-header"><div><div class="eyebrow">词汇管理 / {{ currentLibrary ? '词库' : '全部' }}</div><h1 tabindex="-1">{{ query.unclassified ? '未分类' : currentLibrary?.name || '全部词条' }}</h1><p v-if="currentLibrary?.description" class="muted">{{ currentLibrary.description }}</p></div><div class="toolbar"><button class="secondary-button" :disabled="busy" @click="emit('data', [], 'import')">导入文件</button><button :disabled="!ready || busy || demo" @click="newWord">新增词条</button><button v-if="currentLibrary && !demo" class="danger-button" :disabled="busy" @click="deleteLibrary">删除词库</button></div></header>
       <p v-if="demo" class="demo-banner" role="status">浏览器演示 · 下方是 8 条隔离样例，不是正式词库或 Excel 导入结果。可查看、检索和切换词库；保存及文件操作请使用桌面版。</p>
       <p v-if="error" class="error" role="alert">{{ error }}</p><p v-if="notice" class="notice" role="status">{{ notice }}</p>
+      <p v-if="stale" class="notice" role="status">词库数据已变化，正在核对列表和选择版本。<button class="text-button" :disabled="busy" @click="refreshChangedData">重试刷新</button></p>
       <StoragePanel v-if="!ready" :storage="storage" />
       <section v-if="ready" class="formal-controls" aria-label="检索筛选">
         <label class="search"><span>检索</span><input ref="searchInput" v-model="query.text" :aria-label="demo ? '搜索演示词条' : '搜索真实词条'" placeholder="写法、假名、中文义项、备注" @input="schedule" @compositionstart="beginComposition" @compositionend="endComposition" /><kbd>Ctrl / ⌘ F</kbd></label>
@@ -176,19 +251,20 @@ defineExpose({ modal });
       </section>
       <section v-if="selected.length && !demo" class="batch-toolbar" aria-label="批量操作">
         <strong>当前已选 {{ selected.length }} 条</strong>
-        <button :disabled="busy" @click="emit('data', selected.map(word => word.id), 'export')">导出所选词条</button>
+        <button :disabled="busy || stale || loading" @click="emit('data', selected.map(word => word.id), 'export')">导出所选词条</button>
         <select v-model="batchTarget" aria-label="目标词库"><option value="">选择词库</option><option v-for="library in libraries" :key="library.id" :value="library.id">{{ library.name }}</option></select>
-        <button :disabled="busy || !batchTarget" @click="batch('add_library', batchTarget)">加入词库</button><button :disabled="busy || !batchTarget" @click="batch('remove_library', batchTarget)">移出词库</button>
-        <button class="danger-button" :disabled="busy" @click="deleteWords">永久删除词条…</button><button class="text-button" @click="selected = []">清空选择</button>
+        <button :disabled="busy || stale || loading || !batchTarget" @click="batch('add_library', batchTarget)">加入词库</button><button :disabled="busy || stale || loading || !batchTarget" @click="batch('remove_library', batchTarget)">移出词库</button>
+        <button class="danger-button" :disabled="busy || stale || loading" @click="deleteWords">永久删除词条…</button><button class="text-button" @click="selected = []">清空选择</button>
       </section>
-      <section v-if="ready" class="formal-workspace">
-        <div class="list-panel"><div class="panel-heading"><h2>{{ total }} 个匹配词条</h2><button v-if="detail && !showDetail" class="text-button" @click="showDetail = true">查看当前词条</button></div>
-          <WordList :words="words" :active-id="activeId" :selected="selected" :loading="loading" :readonly="demo" @select="openWord" @toggle="toggle" @range="range" @open="showDetail = true" />
+      <section v-if="ready" class="formal-workspace" :class="{ 'reading-workspace': readerVisible, 'reader-page': readerVisible && narrow }">
+        <div class="list-panel"><div class="panel-heading"><div><span class="eyebrow">{{ readerVisible ? '词目索引' : '词库浏览' }}</span><h2>{{ total }} 个匹配词条</h2></div><button v-if="activeId && narrow && !showDetail" class="text-button" @click="openWord(activeId)">查看当前词条</button><div class="view-switch" role="group" aria-label="浏览布局"><button :aria-pressed="readingMode" @click="setReading(true)">阅读</button><button :aria-pressed="!readingMode" @click="setReading(false)">列表</button></div></div>
+          <p class="list-help">{{ readerVisible ? '↑ ↓ 选择词目 · Enter 聚焦阅读' : '点击词条阅读完整释义与例句' }}</p>
+          <WordList :words="words" :active-id="activeId" :selected="selected" :loading="loading" :readonly="demo" :compact="readerVisible" :reveal-active="navigating" @select="chooseWord" @toggle="toggle" @range="range" @open="openWord" />
           <footer><span>{{ loading ? '正在更新…' : `已加载 ${words.length} / ${total} 条` }}</span><button v-if="cursor" :disabled="loading" @click="search(true)">加载下一页</button></footer>
         </div>
+        <WordDetailView v-if="readerVisible" :word="detailLoading ? undefined : detail" :libraries="libraries" :readonly="demo" :position="activeIndex + 1" :total="total" :has-previous="activeIndex > 0" :has-next="activeIndex < words.length - 1 || Boolean(cursor)" :navigating="navigating || detailLoading || loading" :error="detailError" @navigate="navigateWord" @retry="select(activeId)" @edit="editWord" @delete="deleteCurrentWord" @close="closeDetail" />
       </section>
     </main>
-    <Transition name="drawer" @after-enter="detailEntered" @after-leave="detailExited"><WordDetailView v-if="showDetail && (detail || detailLoading)" :word="detailLoading ? undefined : detail" :libraries="libraries" :readonly="demo" @edit="editWord" @delete="deleteCurrentWord" @close="closeDetail" /></Transition>
     <Transition name="dialog"><LibraryEditor v-if="libraryDialog" ref="libraryEditor" :library="editingLibrary" @close="closeEditor" @saved="savedLibrary" @continue-editing="exitRequested = false" /></Transition>
     <Transition name="dialog"><WordEditor v-if="wordDialog" ref="editor" :word="editingWord" :libraries="libraries" :library-id="query.library_id" @close="closeEditor" @saved="savedWord" @continue-editing="exitRequested = false" /></Transition>
     <Transition name="dialog"><EditorDialog v-if="confirmation" :title="confirmation.title" :busy="busy" @close="closeConfirmation"><div class="editor-form"><p v-if="error" class="error" role="alert">{{ error }}</p><p>{{ confirmation.message }}</p><p v-if="confirmation.stage === 2" class="error">第二次确认：此操作将永久删除上述数据。</p><button class="danger-button" :disabled="busy" @click="confirm">{{ confirmation.second && confirmation.stage === 1 ? '我已了解，继续确认' : '确认执行' }}</button><button :disabled="busy" @click="confirmation = undefined">取消</button></div></EditorDialog></Transition>

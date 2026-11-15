@@ -18,10 +18,11 @@ function mount() {
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
+  let reject!: (cause: Error) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
-afterEach(() => { app.unmount(); vi.clearAllMocks(); vi.useRealTimers(); });
+afterEach(() => { app.unmount(); vi.resetAllMocks(); vi.useRealTimers(); });
 
 test('late detail response cannot replace a newer active word', async () => {
   const first = deferred<WordDetail>();
@@ -34,6 +35,43 @@ test('late detail response cannot replace a newer active word', async () => {
   first.resolve({ revision: 1 } as WordDetail); await older;
   expect(state.activeId.value).toBe('second');
   expect(state.detail.value?.revision).toBe(2);
+});
+
+test.each(['filter', 'composition'] as const)('%s cancellation allows retrying the same detail after list failure', async source => {
+  vi.useFakeTimers();
+  const cancelled = deferred<WordDetail>();
+  const retry = deferred<WordDetail>();
+  mocks.vocabulary.mockReturnValueOnce(cancelled.promise)
+    .mockRejectedValueOnce(new Error('list failed'))
+    .mockReturnValueOnce(retry.promise);
+  const state = mount();
+  const pending = state.select('word');
+  expect(state.detailLoading.value).toBe(true);
+
+  state.query.value.text = '猫';
+  if (source === 'composition') state.beginComposition();
+  else state.schedule();
+  expect(state.detailLoading.value).toBe(false);
+  if (source === 'composition') state.endComposition();
+  await vi.advanceTimersByTimeAsync(200);
+  expect(state.error.value).toContain('list failed');
+  expect(state.detailLoading.value).toBe(false);
+
+  const retried = state.select('word');
+  expect(mocks.vocabulary.mock.calls.filter(([request]) => request.operation === 'get_word')).toHaveLength(2);
+  expect(state.detailLoading.value).toBe(true);
+  if (source === 'composition') cancelled.reject(new Error('cancelled detail failed'));
+  else cancelled.resolve({ revision: 1 } as WordDetail);
+  await pending;
+  expect(state.detail.value).toBeUndefined();
+  expect(state.detailError.value).toBe('');
+  expect(state.detailLoading.value).toBe(true);
+
+  retry.resolve({ revision: 2 } as WordDetail);
+  await retried;
+  expect(state.activeId.value).toBe('word');
+  expect(state.detail.value?.revision).toBe(2);
+  expect(state.detailLoading.value).toBe(false);
 });
 
 test('changing filters clears selection and ignores an in-flight list', async () => {
