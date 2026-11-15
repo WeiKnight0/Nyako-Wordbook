@@ -1,9 +1,10 @@
 name: Desktop validation
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     tags: ['v*']
   pull_request:
+    branches: [main, dev]
   workflow_dispatch:
     inputs:
       release_tag:
@@ -13,7 +14,48 @@ on:
 permissions:
   contents: read
 jobs:
+  rules:
+    if: >-
+      (github.event_name == 'pull_request' && contains(fromJSON('["main","dev"]'), github.head_ref)) ||
+      (github.event_name != 'pull_request' &&
+        (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' ||
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) &&
+        (inputs.release_tag == '' || github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-24.04
+    outputs:
+      package: ${{ steps.policy.outputs.package }}
+      publish: ${{ steps.policy.outputs.publish }}
+      release_tag: ${{ steps.policy.outputs.release_tag }}
+      commit: ${{ steps.policy.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+          fetch-depth: 0
+      - name: Validate build and release policy
+        id: policy
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BUILD_REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ inputs.release_tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || '' }}
+        run: |
+          package=false
+          publish=false
+          if [[ "$EVENT_NAME" != 'pull_request' && "$BUILD_REF" == 'refs/heads/main' ]]; then
+            package=true
+          fi
+          if [[ -n "$RELEASE_TAG" ]]; then
+            version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+            test "v${version}" = "$RELEASE_TAG"
+            test "$(git tag --points-at HEAD --list "$RELEASE_TAG")" = "$RELEASE_TAG"
+            git merge-base --is-ancestor HEAD origin/main
+            package=true
+            publish=true
+          fi
+          printf 'package=%s\npublish=%s\nrelease_tag=%s\ncommit=%s\n' "$package" "$publish" "$RELEASE_TAG" "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
   desktop:
+    needs: rules
     strategy:
       fail-fast: false
       matrix:
@@ -22,16 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.release_tag || github.ref }}
-      - name: Check release version
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
-        run: |
-          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          test "v${version}" = "$RELEASE_TAG"
-          test "$(git tag --points-at HEAD --list "$RELEASE_TAG")" = "$RELEASE_TAG"
+          ref: ${{ needs.rules.outputs.commit }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -47,8 +80,14 @@ jobs:
       - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: npm test
       - run: npm run test:rust -- --locked
-      - run: npm run desktop:build -- --ci
+      - name: Compile desktop
+        if: needs.rules.outputs.package != 'true'
+        run: npm run desktop:build -- --ci --no-bundle
+      - name: Package desktop
+        if: needs.rules.outputs.package == 'true'
+        run: npm run desktop:build -- --ci
       - uses: actions/upload-artifact@v4
+        if: needs.rules.outputs.package == 'true'
         with:
           name: desktop-${{ matrix.os }}
           path: |
@@ -60,8 +99,8 @@ jobs:
             src-tauri/target/release/bundle/**/*.rpm
           if-no-files-found: error
   release:
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
-    needs: desktop
+    if: needs.rules.outputs.publish == 'true'
+    needs: [rules, desktop]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -83,7 +122,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+          RELEASE_TAG: ${{ needs.rules.outputs.release_tag }}
         run: |
           mapfile -d '' assets < <(find release-assets -type f \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' \) -print0)
           test "${#assets[@]}" -ge 3
