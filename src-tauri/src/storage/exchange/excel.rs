@@ -9,6 +9,8 @@ use std::{
     path::Path,
 };
 
+const NAMESPACE_NAME: &str = "_nyako_source_namespace";
+
 pub(super) const LABELS: &[&str] = &[
     "词条标识",
     "写法",
@@ -293,6 +295,28 @@ fn export_examples(examples: &[ExchangeExample]) -> Result<(String, String), App
     Ok((export_text(&japanese, "日文例句")?, cn))
 }
 
+fn source_namespace(book: &Xlsx<Cursor<&[u8]>>, fallback: &str) -> Result<String, AppError> {
+    let mut names = book
+        .defined_names()
+        .iter()
+        .filter(|(name, _)| name == NAMESPACE_NAME);
+    let Some((_, value)) = names.next() else {
+        return super::super::validation::text(fallback, 1, 1000);
+    };
+    if names.next().is_some() {
+        return Err(invalid("Excel 来源命名空间重复"));
+    }
+    // 只读取常量字符串，绝不解析或执行工作簿中的命名公式。
+    let literal = value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .ok_or_else(|| invalid("Excel 来源命名空间必须为文本常量"))?;
+    if literal.replace("\"\"", "").contains('"') {
+        return Err(invalid("Excel 来源命名空间文本转义无效"));
+    }
+    super::super::validation::text(&literal.replace("\"\"", "\""), 1, 1000)
+}
+
 /// @description 将固定十列的单表 Excel 转为逐行词条；音调拍数由假名推导。 @param bytes 文件内容；options 列设置；namespace 稳定导入来源；control 任务控制。 @throws 缺少必填列、格式错误或非法单元格时报错。
 pub(super) fn parse(
     bytes: &[u8],
@@ -392,9 +416,8 @@ pub(super) fn parse(
             .processed
             .store(result.len(), std::sync::atomic::Ordering::Release);
     }
-    super::super::validation::text(namespace, 1, 1000)?;
     Ok((
-        namespace.into(),
+        source_namespace(&book, namespace)?,
         result,
         [
             "external_id",
@@ -413,15 +436,25 @@ pub(super) fn parse(
     ))
 }
 
-/// @description 写出十列单表并复读校验，不截断多义项等无法表达的内容。 @param path 输出路径；namespace 来源；words 词条；control 任务状态。 @throws 复杂词条或格式限制不允许单表无损表示时拒绝。
+/// @description 写出十列单表并复读校验，不截断多义项等无法表达的内容。 @param path 输出路径；namespace 导出来源，模板留空以使用用户填写的来源；words 词条；control 任务状态。 @throws 复杂词条或格式限制不允许单表无损表示时拒绝。
 pub(super) fn write(
     path: &Path,
-    namespace: &str,
+    namespace: Option<&str>,
     words: &[ExchangeWord],
     control: &Control,
 ) -> Result<(), AppError> {
-    super::super::validation::text(namespace, 1, 1000)?;
+    let namespace = namespace
+        .map(|value| super::super::validation::text(value, 1, 1000))
+        .transpose()?;
     let mut book = Workbook::new();
+    // 模板的来源由用户指定；只有导出数据携带可跨文件保留的身份来源。
+    if let Some(namespace) = &namespace {
+        book.define_name(
+            NAMESPACE_NAME,
+            &format!("=\"{}\"", namespace.replace('"', "\"\"")),
+        )
+        .map_err(json_error)?;
+    }
     let chinese = Format::new().set_font_name("Microsoft YaHei");
     let japanese = Format::new().set_font_name("Yu Gothic");
     let sheet = book.add_worksheet().set_name("词条").map_err(json_error)?;
@@ -500,7 +533,16 @@ pub(super) fn write(
     }
     book.save(path).map_err(json_error)?;
     let bytes = super::read_source(path)?;
-    let (_, parsed, _) = parse(&bytes, &ExcelOptions::default(), namespace, control)?;
+    let expected_namespace = namespace.as_deref().unwrap_or("nyako:template-check");
+    let (parsed_namespace, parsed, _) = parse(
+        &bytes,
+        &ExcelOptions::default(),
+        expected_namespace,
+        control,
+    )?;
+    if parsed_namespace != expected_namespace {
+        return Err(invalid("Excel 输出来源校验失败"));
+    }
     if parsed.len() != words.len() || parsed.iter().any(|(_, word)| word.is_err()) {
         return Err(invalid("Excel 输出复读校验失败"));
     }

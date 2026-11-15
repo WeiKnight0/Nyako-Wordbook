@@ -118,7 +118,7 @@ fn excel_single_sheet_roundtrip_and_reimport_preserve_cards() {
     changed.note = "Excel 修改后的备注".into();
     super::excel::write(
         &output,
-        &task.source_namespace,
+        Some(&task.source_namespace),
         &[changed],
         &jobs::Control::default(),
     )
@@ -158,6 +158,137 @@ fn excel_single_sheet_roundtrip_and_reimport_preserve_cards() {
 }
 
 #[test]
+fn excel_template_uses_each_user_supplied_namespace() {
+    let root = tempfile::tempdir().unwrap();
+    let mut conn = database(root.path());
+    let source = root.path().join("template.xlsx");
+    super::excel_template::save(&source, None, &jobs::Control::default()).unwrap();
+    for (namespace, expected_matched) in [
+        ("user-library-a", false),
+        ("user-library-b", false),
+        ("user-library-a", true),
+    ] {
+        let task = preview(
+            root.path(),
+            &source,
+            &ImportOptions {
+                source_namespace: namespace.into(),
+                excel: Default::default(),
+            },
+        )
+        .unwrap();
+        assert_eq!(task.source_namespace, namespace);
+        prepare(&conn, root.path(), &task.task_id).unwrap();
+        let rows = super::import::page(&conn, root.path(), &task.task_id, 0, false).unwrap();
+        assert_eq!(rows[0].matched.is_some(), expected_matched);
+        if expected_matched {
+            continue;
+        }
+        let mut target = options();
+        target.library_id = None;
+        target.new_library = Some(namespace.into());
+        target.choices.push(super::import::Choice {
+            line: 2,
+            action: "new".into(),
+            target: None,
+            strategy: "keep".into(),
+            fields: Default::default(),
+            clear: Default::default(),
+        });
+        assert_eq!(
+            commit(
+                &mut conn,
+                root.path(),
+                &task.task_id,
+                target,
+                &jobs::Control::default()
+            )
+            .unwrap()
+            .created,
+            1
+        );
+    }
+    assert_eq!(
+        conn.query_row(
+            "SELECT count(DISTINCT word_id) FROM source_links WHERE external_id='sample-cat-001'",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn json_export_rejects_oversized_local_aggregate_before_publishing() {
+    let root = tempfile::tempdir().unwrap();
+    let mut conn = database(root.path());
+    let document: super::format::Document =
+        serde_json::from_slice(&std::fs::read(file(root.path())).unwrap()).unwrap();
+    let mut input = document.words[0].input().unwrap();
+    input.senses = (0..40)
+        .map(|_| crate::storage::models::Sense {
+            id: super::format::id(),
+            meaning: "释".repeat(10_000),
+        })
+        .collect();
+    input.examples.clear();
+    let saved = crate::storage::words::save(&mut conn, input, None).unwrap();
+    for existing in [false, true] {
+        let output = root.path().join(if existing {
+            "existing.json"
+        } else {
+            "new.json"
+        });
+        if existing {
+            std::fs::write(&output, b"original file").unwrap();
+        }
+        let error = super::export::export(
+            &mut conn,
+            super::export::ExportOptions {
+                expected: super::output::fingerprint(&output).unwrap(),
+                path: output.clone(),
+                format: "json".into(),
+                library_id: None,
+                selected: vec![saved.content.id.clone()],
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("单个词条超过 1MiB"),
+            "{}",
+            error.message
+        );
+        assert!(error.message.contains(&saved.content.id));
+        if existing {
+            assert_eq!(std::fs::read(&output).unwrap(), b"original file");
+        } else {
+            assert!(!output.exists());
+        }
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM source_links", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM settings WHERE key='export_namespace'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        assert!(!std::fs::read_dir(root.path()).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".nyako-export-")));
+    }
+}
+
+#[test]
 fn excel_plain_chinese_sheet_maps_and_rejects_formulas() {
     let root = tempfile::tempdir().unwrap();
     let conn = database(root.path());
@@ -182,6 +313,7 @@ fn excel_plain_chinese_sheet_maps_and_rejects_formulas() {
     };
     let task = preview(root.path(), &path, &options).unwrap();
     assert_eq!((task.valid, task.errors), (1, 0));
+    assert_eq!(task.source_namespace, "plain");
     let rows = super::import::stage(root.path(), &task.task_id).unwrap();
     let word: String = rows
         .query_row("SELECT content FROM rows", [], |row| row.get(0))
@@ -301,11 +433,52 @@ fn excel_rejects_numbered_meaning_conflict() {
         note: String::new(),
     };
     assert!(
-        super::excel::write(&path, "test", &[word], &jobs::Control::default())
+        super::excel::write(&path, Some("test"), &[word], &jobs::Control::default())
             .unwrap_err()
             .message
             .contains("编号行格式冲突")
     );
+}
+
+#[test]
+fn excel_namespace_metadata_reads_only_escaped_string_constants() {
+    let root = tempfile::tempdir().unwrap();
+    let source = file(root.path());
+    let document: super::format::Document =
+        serde_json::from_slice(&std::fs::read(source).unwrap()).unwrap();
+    let path = root.path().join("namespace.xlsx");
+    let namespace = "来源\"甲\"与中文";
+    super::excel::write(
+        &path,
+        Some(namespace),
+        &document.words,
+        &jobs::Control::default(),
+    )
+    .unwrap();
+    let (actual, _, _) = super::excel::parse(
+        &std::fs::read(&path).unwrap(),
+        &Default::default(),
+        "ignored",
+        &jobs::Control::default(),
+    )
+    .unwrap();
+    assert_eq!(actual, namespace);
+    let mut book = rust_xlsxwriter::Workbook::new();
+    let sheet = book.add_worksheet();
+    for (column, label) in super::excel::LABELS.iter().enumerate() {
+        sheet.write_string(0, column as u16, *label).unwrap();
+    }
+    book.define_name("_nyako_source_namespace", "=1+1").unwrap();
+    book.save(&path).unwrap();
+    assert!(super::excel::parse(
+        &std::fs::read(path).unwrap(),
+        &Default::default(),
+        "fallback",
+        &jobs::Control::default()
+    )
+    .unwrap_err()
+    .message
+    .contains("文本常量"));
 }
 
 #[test]
@@ -349,7 +522,7 @@ fn excel_multiple_senses_pitches_and_examples_roundtrip() {
     };
     super::excel::write(
         &path,
-        "multi",
+        Some("multi"),
         std::slice::from_ref(&word),
         &jobs::Control::default(),
     )
@@ -380,7 +553,7 @@ fn excel_multiple_senses_pitches_and_examples_roundtrip() {
     let blank_path = root.path().join("untranslated.xlsx");
     super::excel::write(
         &blank_path,
-        "multi",
+        Some("multi"),
         &[untranslated.clone()],
         &jobs::Control::default(),
     )
@@ -581,7 +754,13 @@ fn verb_transitivity_survives_excel_and_json_roundtrips() {
         note: String::new(),
     };
     let source = root.path().join("verbs.xlsx");
-    super::excel::write(&source, "verbs", &[word.clone()], &jobs::Control::default()).unwrap();
+    super::excel::write(
+        &source,
+        Some("verbs"),
+        &[word.clone()],
+        &jobs::Control::default(),
+    )
+    .unwrap();
     let task = preview_file(root.path(), &conn, &source);
     assert_eq!((task.valid, task.errors), (1, 0));
     commit(
@@ -642,11 +821,297 @@ fn verb_transitivity_survives_excel_and_json_roundtrips() {
     ];
     assert!(super::excel::write(
         &root.path().join("invalid.xlsx"),
-        "verbs",
+        Some("verbs"),
         &[word],
         &jobs::Control::default()
     )
     .is_err());
+}
+
+#[test]
+fn unchanged_import_membership_invalidates_old_edit_without_touching_study_data() {
+    let root = tempfile::tempdir().unwrap();
+    let mut conn = database(root.path());
+    let source = file(root.path());
+    let first = preview_file(root.path(), &conn, &source);
+    commit(
+        &mut conn,
+        root.path(),
+        &first.task_id,
+        options(),
+        &jobs::Control::default(),
+    )
+    .unwrap();
+    conn.execute("UPDATE words SET updated_at=1", []).unwrap();
+    conn.execute("UPDATE cards SET suspended=1,due_at=1234,revision=7", [])
+        .unwrap();
+    conn.execute(
+        "INSERT INTO sessions VALUES('session','{}',1,NULL,'active','UTC',4)",
+        [],
+    )
+    .unwrap();
+    conn.execute("INSERT INTO review_events SELECT 'event',id,'session','rating',3,123,'2026-11-01',1000,'{}','{}','6.6.2','fsrs6-default',NULL,0 FROM cards", []).unwrap();
+    fn snapshot(conn: &Connection, table: &str) -> Vec<Vec<rusqlite::types::Value>> {
+        let mut statement = conn
+            .prepare(&format!("SELECT * FROM {table} ORDER BY id"))
+            .unwrap();
+        let columns = statement.column_count();
+        statement
+            .query_map([], |row| (0..columns).map(|index| row.get(index)).collect())
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+    let cards = snapshot(&conn, "cards");
+    let events = snapshot(&conn, "review_events");
+    let word_id: String = conn
+        .query_row("SELECT id FROM words", [], |row| row.get(0))
+        .unwrap();
+    let before = crate::storage::words::get(&conn, &word_id).unwrap();
+    let second = preview_file(root.path(), &conn, &source);
+    let mut target = options();
+    target.library_id = None;
+    target.new_library = Some("新增词库".into());
+    assert_eq!(
+        commit(
+            &mut conn,
+            root.path(),
+            &second.task_id,
+            target,
+            &jobs::Control::default()
+        )
+        .unwrap()
+        .unchanged,
+        1
+    );
+    let after = crate::storage::words::get(&conn, &word_id).unwrap();
+    assert_eq!(after.revision, before.revision + 1);
+    assert!(after.updated_at > before.updated_at);
+    assert_eq!(after.content.library_ids.len(), 2);
+    assert_eq!(
+        crate::storage::words::save(&mut conn, before.content, Some(before.revision))
+            .unwrap_err()
+            .code,
+        "REVISION_CONFLICT"
+    );
+    assert_eq!(
+        crate::storage::words::get(&conn, &word_id).unwrap().content,
+        after.content
+    );
+    let repeated = preview_file(root.path(), &conn, &source);
+    let mut target = options();
+    target.library_id = after
+        .content
+        .library_ids
+        .iter()
+        .find(|id| Some(*id) != options().library_id.as_ref())
+        .cloned();
+    assert_eq!(
+        commit(
+            &mut conn,
+            root.path(),
+            &repeated.task_id,
+            target,
+            &jobs::Control::default()
+        )
+        .unwrap()
+        .unchanged,
+        1
+    );
+    let repeated = crate::storage::words::get(&conn, &word_id).unwrap();
+    assert_eq!(repeated.revision, after.revision);
+    assert_eq!(repeated.updated_at, after.updated_at);
+    assert_eq!(cards, snapshot(&conn, "cards"));
+    assert_eq!(events, snapshot(&conn, "review_events"));
+}
+
+#[test]
+fn json_roundtrip_preserves_maximum_unicode_notes() {
+    let root = tempfile::tempdir().unwrap();
+    let mut conn = database(root.path());
+    let source = file(root.path());
+    let first = preview_file(root.path(), &conn, &source);
+    commit(
+        &mut conn,
+        root.path(),
+        &first.task_id,
+        options(),
+        &jobs::Control::default(),
+    )
+    .unwrap();
+    let word_id: String = conn
+        .query_row("SELECT id FROM words", [], |row| row.get(0))
+        .unwrap();
+    for character in ["备", "𠀀"] {
+        let mut detail = crate::storage::words::get(&conn, &word_id).unwrap();
+        detail.content.note = character.repeat(100_000);
+        let saved =
+            crate::storage::words::save(&mut conn, detail.content, Some(detail.revision)).unwrap();
+        let output = root.path().join(format!("note-{}.json", saved.revision));
+        super::export::export(
+            &mut conn,
+            super::export::ExportOptions {
+                path: output.clone(),
+                format: "json".into(),
+                library_id: options().library_id,
+                selected: vec![],
+                expected: None,
+            },
+        )
+        .unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let mut restored = database(second.path());
+        let task = preview_file(second.path(), &restored, &output);
+        assert_eq!((task.valid, task.errors), (1, 0));
+        commit(
+            &mut restored,
+            second.path(),
+            &task.task_id,
+            options(),
+            &jobs::Control::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            restored
+                .query_row("SELECT note FROM words", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            saved.content.note
+        );
+        let imported = preview_file(root.path(), &conn, &output);
+        assert_eq!(
+            commit(
+                &mut conn,
+                root.path(),
+                &imported.task_id,
+                options(),
+                &jobs::Control::default()
+            )
+            .unwrap()
+            .unchanged,
+            1
+        );
+        assert_eq!(
+            crate::storage::words::get(&conn, &word_id)
+                .unwrap()
+                .revision,
+            saved.revision
+        );
+    }
+    let mut word =
+        super::import::portable(&crate::storage::words::get(&conn, &word_id).unwrap().content);
+    word.note.push('备');
+    assert!(word.validate().is_err());
+}
+
+#[test]
+fn excel_export_retains_namespace_when_spelling_and_reading_change() {
+    let root = tempfile::tempdir().unwrap();
+    let mut conn = database(root.path());
+    let source = file(root.path());
+    let first = preview_file(root.path(), &conn, &source);
+    commit(
+        &mut conn,
+        root.path(),
+        &first.task_id,
+        options(),
+        &jobs::Control::default(),
+    )
+    .unwrap();
+    let output = root.path().join("identity.xlsx");
+    super::export::export(
+        &mut conn,
+        super::export::ExportOptions {
+            path: output.clone(),
+            format: "xlsx".into(),
+            library_id: options().library_id,
+            selected: vec![],
+            expected: None,
+        },
+    )
+    .unwrap();
+    let exported = preview_file(root.path(), &conn, &output);
+    let namespace: String = serde_json::from_str(
+        &conn
+            .query_row(
+                "SELECT value_json FROM settings WHERE key='export_namespace'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(exported.source_namespace, namespace);
+    let rows = super::import::page(&conn, root.path(), &exported.task_id, 0, false).unwrap();
+    let word_id = rows[0].matched.clone().expect("导出身份应直接匹配原词条");
+    let second = tempfile::tempdir().unwrap();
+    let mut restored = database(second.path());
+    let imported = preview_file(second.path(), &restored, &output);
+    commit(
+        &mut restored,
+        second.path(),
+        &imported.task_id,
+        options(),
+        &jobs::Control::default(),
+    )
+    .unwrap();
+    let restored_id: String = restored
+        .query_row("SELECT id FROM words", [], |row| row.get(0))
+        .unwrap();
+    let mut changed =
+        serde_json::from_value::<super::format::ExchangeWord>(rows[0].content.clone().unwrap())
+            .unwrap();
+    changed.kanji = "小猫".into();
+    changed.kana = "こねこ".into();
+    super::excel::write(
+        &output,
+        Some(&namespace),
+        &[changed],
+        &jobs::Control::default(),
+    )
+    .unwrap();
+    for (database, directory, expected_id) in [
+        (&mut conn, root.path(), word_id),
+        (&mut restored, second.path(), restored_id),
+    ] {
+        let task = preview_file(directory, database, &output);
+        let rows = super::import::page(database, directory, &task.task_id, 0, false).unwrap();
+        assert_eq!(rows[0].classification, "update");
+        assert_eq!(rows[0].matched.as_ref(), Some(&expected_id));
+        let mut target = options();
+        target.choices.push(super::import::Choice {
+            line: 2,
+            action: "reuse".into(),
+            target: Some(expected_id.clone()),
+            strategy: "replace".into(),
+            fields: ["kanji".into(), "kana".into()].into_iter().collect(),
+            clear: Default::default(),
+        });
+        assert_eq!(
+            commit(
+                database,
+                directory,
+                &task.task_id,
+                target,
+                &jobs::Control::default()
+            )
+            .unwrap()
+            .updated,
+            1
+        );
+        assert_eq!(
+            database
+                .query_row("SELECT count(*) FROM words", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            crate::storage::words::get(database, &expected_id)
+                .unwrap()
+                .content
+                .kana,
+            "こねこ"
+        );
+    }
 }
 
 #[test]
@@ -823,22 +1288,110 @@ fn partial_update_keeps_child_ids_and_bom_duplicates_are_all_rejected() {
 }
 
 #[test]
+fn import_summary_covers_all_pages_and_preserves_field_presence() {
+    let root = tempfile::tempdir().unwrap();
+    let mut conn = database(root.path());
+    let source = file(root.path());
+    let first = preview_file(root.path(), &conn, &source);
+    commit(
+        &mut conn,
+        root.path(),
+        &first.task_id,
+        options(),
+        &jobs::Control::default(),
+    )
+    .unwrap();
+    conn.execute("INSERT INTO source_links SELECT source_namespace,'cat-update',word_id,last_import_hash FROM source_links WHERE external_id='cat'", []).unwrap();
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&source).unwrap()).unwrap();
+    let same = document["words"][0].clone();
+    let mut rows = (0..51).map(|index| serde_json::json!({"external_id":format!("new-{index}"),"kanji":format!("新{index}"),"kana":format!("しん{index}"),"senses":[{"meaning":"新词"}]})).collect::<Vec<_>>();
+    rows.push(same.clone());
+    let mut update = same.clone();
+    update["external_id"] = "cat-update".into();
+    update["note"] = "已提供的更新".into();
+    rows.push(update);
+    let mut unlinked = same.clone();
+    unlinked["external_id"] = "unlinked-same".into();
+    unlinked["note"] = "".into();
+    rows.push(unlinked);
+    let mut ambiguous = same;
+    ambiguous["external_id"] = "unlinked-different".into();
+    ambiguous["note"] = "不同的内容".into();
+    rows.push(ambiguous);
+    rows.push(serde_json::json!({"external_id":"invalid","kanji":"错","kana":"あ","senses":[]}));
+    document["words"] = rows.into();
+    std::fs::write(&source, serde_json::to_vec(&document).unwrap()).unwrap();
+    let task = preview_file(root.path(), &conn, &source);
+    let control = jobs::Control::default();
+    let summary = super::execute(
+        &mut conn,
+        root.path(),
+        ExchangeRequest::ImportSummary {
+            task_id: task.task_id.clone(),
+        },
+        &control,
+    )
+    .unwrap();
+    assert_eq!(
+        summary,
+        serde_json::json!({"new":51,"same":2,"update":1,"ambiguous":1,"error":1,"unresolved_lines":[54,55],"source_namespace":"test-source"})
+    );
+    assert_eq!(
+        control.processed.load(std::sync::atomic::Ordering::Acquire),
+        56
+    );
+    let page = super::import::page(&conn, root.path(), &task.task_id, 50, false).unwrap();
+    assert!(!page[1].present.contains("note"));
+    assert!(page[3].present.contains("note"));
+    assert!(page[5].present.is_empty());
+    assert_eq!(
+        super::import::summary(
+            &conn,
+            root.path(),
+            &task.task_id,
+            &jobs::Control {
+                cancel: AtomicBool::new(true),
+                ..Default::default()
+            }
+        )
+        .unwrap_err()
+        .code,
+        "TASK_CANCELLED"
+    );
+    conn.execute("UPDATE words SET revision=revision+1", [])
+        .unwrap();
+    assert_eq!(
+        super::import::summary(&conn, root.path(), &task.task_id, &jobs::Control::default())
+            .unwrap_err()
+            .code,
+        "IMPORT_TARGET_CHANGED"
+    );
+}
+
+#[test]
 fn unfinished_preview_reopens_and_explicit_resume_rechecks_source() {
     let root = tempfile::tempdir().unwrap();
     let conn = database(root.path());
     let source = file(root.path());
     let task = preview_file(root.path(), &conn, &source);
+    assert_eq!(task.path, source);
+    super::import::stage(root.path(), &task.task_id)
+        .unwrap()
+        .execute(
+            "UPDATE metadata SET value=json_remove(value,'$.path') WHERE key='preview'",
+            [],
+        )
+        .unwrap();
     drop(conn);
     let conn = Connection::open(root.path().join("data/main.sqlite3")).unwrap();
     let pending = super::import::pending(&conn, root.path()).unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].task_id, task.task_id);
-    assert_eq!(
-        super::import::resume(&conn, root.path(), &task.task_id)
-            .unwrap()
-            .valid,
-        1
-    );
+    assert_eq!(pending[0].path, source);
+    let resumed = super::import::resume(&conn, root.path(), &task.task_id).unwrap();
+    assert_eq!(resumed.valid, 1);
+    assert_eq!(resumed.path, source);
     std::fs::write(source, "changed").unwrap();
     assert_eq!(
         super::import::resume(&conn, root.path(), &task.task_id)

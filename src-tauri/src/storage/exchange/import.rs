@@ -27,6 +27,7 @@ pub(crate) struct ImportRow {
     pub locally_modified: bool,
     pub line: i64,
     pub content: Option<serde_json::Value>,
+    pub present: HashSet<String>,
     pub error: Option<String>,
     pub candidates: Vec<Candidate>,
     pub matched: Option<String>,
@@ -138,7 +139,9 @@ pub(super) fn pending(conn: &Connection, root: &Path) -> Result<Vec<Preview>, Ap
             |row| row.get::<_, bool>(0),
         )?;
         if ready && !committed {
-            result.push(metadata(&staged, "preview")?);
+            let mut preview: Preview = metadata(&staged, "preview")?;
+            preview.path = metadata(&staged, "source")?;
+            result.push(preview);
         }
     }
     Ok(result)
@@ -149,8 +152,9 @@ pub(super) fn pending(conn: &Connection, root: &Path) -> Result<Vec<Preview>, Ap
 /// @throws 源文件变动或读取错误时拒绝继续。
 pub(super) fn resume(conn: &Connection, root: &Path, task: &str) -> Result<Preview, AppError> {
     let staged = stage(root, task)?;
-    let preview: Preview = metadata(&staged, "preview")?;
+    let mut preview: Preview = metadata(&staged, "preview")?;
     let source: PathBuf = metadata(&staged, "source")?;
+    preview.path = source.clone();
     if hash(&read_source(&source)?) != preview.file_hash {
         return Err(AppError::new(
             "IMPORT_SOURCE_CHANGED",
@@ -207,18 +211,21 @@ pub(super) fn page(
 ) -> Result<Vec<ImportRow>, AppError> {
     let stage = stage(root, task)?;
     let preview: Preview = metadata(&stage, "preview")?;
-    let mut stmt = stage.prepare("SELECT line,content,error FROM rows WHERE (?1=0 OR error IS NOT NULL) ORDER BY line LIMIT 50 OFFSET ?2")?;
+    let mut stmt = stage.prepare("SELECT line,content,error,present FROM rows WHERE (?1=0 OR error IS NOT NULL) ORDER BY line LIMIT 50 OFFSET ?2")?;
     let rows = stmt
         .query_map(params![errors, offset], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, Option<String>>(1)?,
                 r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(3)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     rows.into_iter()
-        .map(|(line, content, error)| {
+        .map(|(line, content, error, present)| {
+            let present = present.map(|text| serde_json::from_str(&text).map_err(json_error))
+                .transpose()?.unwrap_or_default();
             let word = content
                 .map(|text| serde_json::from_str::<ExchangeWord>(&text).map_err(json_error))
                 .transpose()?;
@@ -249,12 +256,75 @@ pub(super) fn page(
                     .map(serde_json::to_value)
                     .transpose()
                     .map_err(json_error)?,
+                present,
                 error,
                 candidates,
                 matched,
             })
         })
         .collect()
+}
+
+/// @description 汇总完整预览并列出仍需用户确认身份的行。
+/// @param 不适用，导入摘要契约。
+/// @throws 不抛出。
+#[derive(Debug, Default, Serialize)]
+pub(crate) struct ImportSummary {
+    pub new: usize,
+    pub same: usize,
+    pub update: usize,
+    pub ambiguous: usize,
+    pub error: usize,
+    pub unresolved_lines: Vec<i64>,
+    pub source_namespace: String,
+}
+
+/// @description 对全部暂存行使用与分页相同的分类规则，拒绝过时预览。
+/// @param conn 正式库；root 数据根；task 预览身份；control 取消与进度。
+/// @throws 目标快照变化、取消或读取失败时返回错误。
+pub(super) fn summary(
+    conn: &Connection,
+    root: &Path,
+    task: &str,
+    control: &super::jobs::Control,
+) -> Result<ImportSummary, AppError> {
+    let staged = stage(root, task)?;
+    let preview: Preview = metadata(&staged, "preview")?;
+    let expected: String = metadata(&staged, "target_snapshot")?;
+    if snapshot(conn)? != expected {
+        return Err(changed());
+    }
+    let mut result = ImportSummary {
+        source_namespace: preview.source_namespace,
+        ..Default::default()
+    };
+    (0..preview.total).step_by(50).try_for_each(|offset| {
+        control.check()?;
+        page(conn, root, task, offset as u32, false)?
+            .into_iter()
+            .for_each(|row| {
+                match row.classification.as_str() {
+                    "new" => result.new += 1,
+                    "same" => result.same += 1,
+                    "update" => result.update += 1,
+                    "ambiguous" => result.ambiguous += 1,
+                    "error" => result.error += 1,
+                    _ => unreachable!("分页返回了未知分类"),
+                }
+                if row.matched.is_none() && !row.candidates.is_empty() {
+                    result.unresolved_lines.push(row.line);
+                }
+            });
+        control
+            .processed
+            .store((offset + 50).min(preview.total), Ordering::Release);
+        Ok::<_, AppError>(())
+    })?;
+    control.check()?;
+    if snapshot(conn)? != expected {
+        return Err(changed());
+    }
+    Ok(result)
 }
 
 /// @description 转换为不含数据库身份和学习状态的可交换内容。
@@ -542,10 +612,17 @@ pub(super) fn commit(
                 result.created += 1;
             }
         } else {
-            tx.execute(
+            let time = now()?;
+            if tx.execute(
                 "INSERT OR IGNORE INTO library_words VALUES(?1,?2,?3)",
-                params![library, word_id, now()?],
-            )?;
+                params![library, word_id, time],
+            )? == 1
+            {
+                tx.execute(
+                    "UPDATE words SET revision=revision+1,updated_at=?1 WHERE id=?2",
+                    params![time, word_id],
+                )?;
+            }
             result.unchanged += 1;
         }
         if let Some(external) = &incoming.external_id {

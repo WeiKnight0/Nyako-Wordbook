@@ -5,6 +5,7 @@ use serde_json::Value;
 
 pub(super) const MAX_FILE: u64 = 256 * 1024 * 1024;
 pub(super) const MAX_WORDS: usize = 500_000;
+const MAX_TEXT_BYTES: usize = validation::MAX_NOTE_CHARS * 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -150,7 +151,9 @@ fn check_limits(value: &Value, depth: usize) -> Result<(), AppError> {
         return Err(AppError::validation("JSON 嵌套超过 16 层"));
     }
     match value {
-        Value::String(s) if s.len() > 64 * 1024 => Err(AppError::validation("单个文本超过 64KiB")),
+        Value::String(s) if s.len() > MAX_TEXT_BYTES => Err(AppError::validation(&format!(
+            "单个文本超过 {MAX_TEXT_BYTES} 字节"
+        ))),
         Value::Array(values) => values.iter().try_for_each(|v| check_limits(v, depth + 1)),
         Value::Object(values) => values.values().try_for_each(|v| check_limits(v, depth + 1)),
         _ => Ok(()),

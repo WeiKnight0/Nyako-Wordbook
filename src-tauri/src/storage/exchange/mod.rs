@@ -40,6 +40,9 @@ pub(crate) enum ExchangeRequest {
     PreparedPreview {
         preview: Preview,
     },
+    ImportSummary {
+        task_id: String,
+    },
     Page {
         task_id: String,
         offset: u32,
@@ -92,6 +95,9 @@ pub(super) fn execute(
         ExchangeRequest::PreparedPreview { preview } => {
             import::prepare(conn, root, &preview.task_id)?;
             serde_json::to_value(preview)
+        }
+        ExchangeRequest::ImportSummary { task_id } => {
+            serde_json::to_value(import::summary(conn, root, &task_id, control)?)
         }
         ExchangeRequest::Page {
             task_id,
@@ -150,6 +156,8 @@ pub(crate) struct ImportOptions {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Preview {
     pub task_id: String,
+    #[serde(default)]
+    pub path: std::path::PathBuf,
     pub format: String,
     pub source_namespace: String,
     pub file_hash: String,
@@ -331,6 +339,7 @@ pub(super) fn preview_controlled(
     )? as usize;
     let preview = Preview {
         task_id,
+        path: source.into(),
         format: if is_excel { "xlsx" } else { "json" }.into(),
         source_namespace: namespace,
         file_hash: hash(&bytes),

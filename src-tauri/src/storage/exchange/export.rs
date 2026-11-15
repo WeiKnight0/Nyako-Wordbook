@@ -32,6 +32,15 @@ pub(super) fn export(
     controlled(conn, options, &super::jobs::Control::default())
 }
 
+fn check_limit(actual: u64, limit: u64, label: &str) -> Result<(), AppError> {
+    if actual > limit {
+        return Err(AppError::validation(&format!(
+            "{label}超过导入上限 {limit}（实际 {actual}），请缩小导出范围"
+        )));
+    }
+    Ok(())
+}
+
 pub(super) fn controlled(
     conn: &mut Connection,
     options: ExportOptions,
@@ -94,6 +103,7 @@ pub(super) fn controlled(
                 options.selected.clone()
             }
         };
+        check_limit(ids.len() as u64, MAX_WORDS as u64, "导出词条数")?;
         if options.format == "xlsx" {
             let mut content = Vec::new();
             for word_id in &ids {
@@ -107,7 +117,7 @@ pub(super) fn controlled(
                 word.external_id = Some(external);
                 content.push(word);
             }
-            super::excel::write(&temporary, &namespace, &content, control)?;
+            super::excel::write(&temporary, Some(&namespace), &content, control)?;
             OpenOptions::new()
                 .write(true)
                 .open(&temporary)?
@@ -143,12 +153,19 @@ pub(super) fn controlled(
                 params![namespace, external, word_id],
             )?;
             word.external_id = Some(external);
+            word.validate().map_err(|error| {
+                AppError::validation(&format!(
+                    "词条 {word_id} 无法导出为可重导入的 JSON：{}",
+                    error.message
+                ))
+            })?;
             if index > 0 {
                 output.write_all(b",")?;
             }
             output.write_all(encode(&word)?.as_bytes())?;
         }
         output.write_all(b"]}")?;
+        check_limit(output.metadata()?.len(), MAX_FILE, "JSON 导出文件字节数")?;
         output.sync_all()?;
         drop(output);
         control.check()?;
@@ -169,4 +186,24 @@ pub(super) fn controlled(
         std::fs::remove_file(&temporary)?;
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn export_limits_accept_boundary_and_reject_excess() {
+        for label in ["导出词条数", "JSON 导出文件字节数"] {
+            for actual in [0, 2, 3] {
+                check_limit(actual, 3, label).unwrap();
+            }
+            let error = check_limit(4, 3, label).unwrap_err();
+            assert_eq!(error.code, "VALIDATION_FAILED");
+            assert!(error.message.contains(label));
+            assert!(error.message.contains("上限 3（实际 4）"));
+        }
+        check_limit(0, 0, "空导出").unwrap();
+        assert!(check_limit(1, 0, "空导出").is_err());
+    }
 }

@@ -32,12 +32,7 @@ pub(super) fn save(
             }],
             note: "这是示例词条，请按需修改或删除；新增词条使用新的唯一标识。".into(),
         };
-        excel::write(
-            &temporary,
-            &format!("nyako:template:{}", id()),
-            &[word],
-            control,
-        )?;
+        excel::write(&temporary, None, &[word], control)?;
         OpenOptions::new()
             .write(true)
             .open(&temporary)?

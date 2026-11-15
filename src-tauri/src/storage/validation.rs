@@ -3,6 +3,9 @@ use crate::error::AppError;
 use std::collections::HashSet;
 use unicode_normalization::UnicodeNormalization;
 
+/// 备注按 Unicode 字符计数；交换格式的字节限额须容纳每字符最多四个 UTF-8 字节。
+pub(super) const MAX_NOTE_CHARS: usize = 100_000;
+
 pub(super) const POS: &[&str] = &[
     "noun",
     "godan_verb",
@@ -63,7 +66,7 @@ pub(super) fn word(mut value: WordInput) -> Result<WordInput, AppError> {
     id(&value.id)?;
     value.kanji = text(&value.kanji, 1, 1000)?;
     value.kana = text(&value.kana, 1, 1000)?;
-    value.note = text(&value.note, 0, 100000)?;
+    value.note = text(&value.note, 0, MAX_NOTE_CHARS)?;
     if value
         .jlpt
         .as_deref()
