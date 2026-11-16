@@ -1,7 +1,7 @@
 use crate::error::AppError;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 
-/// @description 在提交前保证词条聚合完整，并原子提交业务修改。
+/// @description 原子提交已通过业务入口校验的修改。
 /// @param conn 串行服务持有的数据库连接；action 事务中的业务修改。
 /// @throws 返回业务校验或数据库错误，事务自动回滚。
 pub(super) fn transaction<T>(
@@ -10,9 +10,6 @@ pub(super) fn transaction<T>(
 ) -> Result<T, AppError> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let result = action(&tx)?;
-    if tx.query_row("SELECT EXISTS(SELECT 1 FROM words w WHERE NOT EXISTS(SELECT 1 FROM senses s WHERE s.word_id=w.id))", [], |r| r.get::<_, bool>(0))? {
-        return Err(AppError::validation("每个词条至少需要一个有效义项"));
-    }
     tx.commit()?;
     Ok(result)
 }

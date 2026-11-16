@@ -42,11 +42,8 @@ fn schema_constraints_and_aggregate_rollback() {
         2
     );
     let failure = transaction(&mut conn, |tx| {
-        tx.execute(
-            "INSERT INTO words(id,kanji,kana,created_at,updated_at) VALUES('orphan','猫','ねこ',1,1)",
-            [],
-        )?;
-        Ok(())
+        word(tx, "rolled-back");
+        Err::<(), _>(crate::error::AppError::validation("保存失败"))
     })
     .unwrap_err();
     assert_eq!(failure.code, "VALIDATION_FAILED");

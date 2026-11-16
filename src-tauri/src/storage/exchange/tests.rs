@@ -3,6 +3,29 @@ use super::*;
 use std::sync::atomic::AtomicBool;
 
 #[test]
+fn import_change_marker_tracks_local_external_and_reopened_connections() {
+    let root = tempfile::tempdir().unwrap();
+    let conn = database(root.path());
+    let initial = import::snapshot(&conn).unwrap();
+    assert_eq!(initial, import::snapshot(&conn).unwrap());
+    conn.execute("UPDATE libraries SET description='changed'", [])
+        .unwrap();
+    let local = import::snapshot(&conn).unwrap();
+    assert_ne!(initial, local);
+    let path = conn.path().unwrap().to_owned();
+    let external = Connection::open(&path).unwrap();
+    external
+        .execute("UPDATE libraries SET description='external'", [])
+        .unwrap();
+    assert_ne!(local, import::snapshot(&conn).unwrap());
+    let before_reopen = import::snapshot(&conn).unwrap();
+    drop(external);
+    drop(conn);
+    let reopened = Connection::open(path).unwrap();
+    assert_ne!(before_reopen, import::snapshot(&reopened).unwrap());
+}
+
+#[test]
 fn excel_single_sheet_roundtrip_and_reimport_preserve_cards() {
     let root = tempfile::tempdir().unwrap();
     let mut conn = database(root.path());
