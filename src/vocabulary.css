@@ -5,18 +5,26 @@
   border-radius: 9px;
   margin-bottom: 18px;
 }
-.formal-controls { display: grid; grid-template-columns: minmax(180px, 1fr) auto; gap: 10px 18px; padding: 14px 18px; border-radius: 6px; }
-.formal-controls .search { margin: 0; }
-.formal-controls > .filters { flex-wrap: nowrap; }
-.formal-controls > .filters label { min-width: 95px; }
+.formal-controls { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 14px 18px; border-radius: 6px; }
+.formal-controls .search { margin: 0; min-width: 0; }
+.formal-controls .search input { flex: 1; width: 0; }
+.formal-controls > .filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr)); }
 .formal-controls .advanced-filters, .formal-controls .filter-chips { grid-column: 1 / -1; }
 .formal-shell main { padding: 26px 28px; }
 .formal-shell .demo-banner { padding: 8px 12px; margin-bottom: 12px; font-size: 12px; }
 .formal-controls .search > span { white-space: nowrap; }
 .formal-controls .filters { gap: 12px; align-items: end; }
-.formal-controls .filters label { min-width: min(120px, 100%); flex: 1 1 120px; }
-.formal-controls > .filters label { flex: 0 1 190px; }
-.formal-controls .filters select { width: 100%; }
+.formal-controls .filters label { min-width: 0; flex: 1 1 160px; }
+.formal-controls .filters select { width: 100%; max-width: 100%; }
+.formal-controls > *, .advanced-filters .filters { min-width: 0; }
+.filter-chips button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+.formal-shell main { min-width: 0; }
+.library-header { flex-wrap: wrap; }
+.library-header > div { min-width: 0; }
+.library-header h1, .library-header .muted { overflow-wrap: anywhere; }
+.list-panel > footer { flex-wrap: wrap; gap: 10px; }
+.list-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.formal-workspace .panel-heading { flex-wrap: wrap; }
 .advanced-filters { margin-top: 12px; border-top: 1px solid #e8ede7; padding-top: 10px; }
 .advanced-filters summary { cursor: pointer; color: #476c58; font-size: 12px; font-weight: 600; }
 .advanced-filters .filters { margin: 12px 0; }
