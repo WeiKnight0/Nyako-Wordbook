@@ -52,7 +52,7 @@ test('data and diagnostics round trips preserve query, pagination, checkboxes an
   input.value = '猫'; input.dispatchEvent(new Event('input', { bubbles: true }));
   await vi.advanceTimersByTimeAsync(200); await settle();
   host.querySelector<HTMLInputElement>('[aria-label="选择 词0"]')!.click(); await settle();
-  button('加载下一页').click(); await settle();
+  button('下一页').click(); await settle();
   const list = host.querySelector<HTMLElement>('[role="listbox"]')!;
   list.scrollTop = 7200; list.dispatchEvent(new Event('scroll')); await settle();
   host.querySelector<HTMLInputElement>('[aria-label="选择 词105"]')!.click(); await settle();
@@ -79,9 +79,38 @@ test('data and diagnostics round trips preserve query, pagination, checkboxes an
   expect(host.querySelector('[role="dialog"]')).toBeNull();
 });
 
+test('pagination returns to cached pages and disables both result boundaries', async () => {
+  button('列表').click(); await settle();
+  expect(button('上一页').disabled).toBe(true);
+  expect(host.textContent).toContain('第 1 / 2 页');
+  button('下一页').click(); await settle();
+  expect(host.querySelector('[role="listbox"]')?.getAttribute('aria-activedescendant')).toBe('formal-100');
+  expect(host.textContent).toContain('第 2 / 2 页');
+  expect(button('下一页').disabled).toBe(true);
+  const calls = queries().length;
+  button('上一页').click(); await settle();
+  expect(host.querySelector('[role="listbox"]')?.getAttribute('aria-activedescendant')).toBe('formal-0');
+  expect(host.querySelector<HTMLElement>('[role="listbox"]')!.scrollTop).toBe(0);
+  expect(host.textContent).toContain('第 1 / 2 页');
+  expect(button('上一页').disabled).toBe(true);
+  button('下一页').click(); await settle();
+  expect(queries()).toHaveLength(calls);
+  expect(host.textContent).toContain('第 2 / 2 页');
+});
+
+test('failed next page keeps the current page and allows retrying', async () => {
+  mocks.vocabulary.mockRejectedValueOnce(new Error('page failed'));
+  button('下一页').click(); await settle();
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('page failed');
+  expect(host.textContent).toContain('第 1 / 2 页');
+  expect(button('下一页').disabled).toBe(false);
+  button('下一页').click(); await settle();
+  expect(host.textContent).toContain('第 2 / 2 页');
+});
+
 test('changed data reloads loaded pages and batch operations use current selection revisions', async () => {
   host.querySelector<HTMLInputElement>('[aria-label="选择 词0"]')!.click(); await settle();
-  button('加载下一页').click(); await settle();
+  button('下一页').click(); await settle();
   const list = host.querySelector<HTMLElement>('[role="listbox"]')!;
   list.scrollTop = 7200; list.dispatchEvent(new Event('scroll')); await settle();
   host.querySelector<HTMLInputElement>('[aria-label="选择 词105"]')!.click(); await settle();
@@ -95,8 +124,8 @@ test('changed data reloads loaded pages and batch operations use current selecti
   expect(queries()).toHaveLength(calls + 2);
   expect(host.textContent).toContain('当前已选 1 条');
   expect(host.textContent).toContain('已加载 149 / 149 条');
-  expect(list.scrollTop).toBe(0);
-  expect(list.getAttribute('aria-activedescendant')).toBe('formal-1');
+  expect(list.scrollTop).toBe(99 * 72);
+  expect(list.getAttribute('aria-activedescendant')).toBe('formal-100');
   list.scrollTop = 7200; list.dispatchEvent(new Event('scroll')); await settle();
   expect(host.textContent).toContain('新释义105');
   const target = host.querySelector<HTMLSelectElement>('[aria-label="目标词库"]')!;

@@ -2,7 +2,7 @@
 import { computed, onActivated, ref, watch } from 'vue';
 import { posLabels, type SelectedWord, type WordRow } from '../vocabulary';
 const props = defineProps<{ words: WordRow[]; activeId: string; selected: SelectedWord[]; loading: boolean; readonly?: boolean; compact?: boolean; revealActive?: boolean }>();
-const emit = defineEmits<{ select: [id: string]; toggle: [word: WordRow]; range: [words: WordRow[]]; open: [id: string] }>();
+const emit = defineEmits<{ select: [id: string]; toggle: [word: WordRow]; range: [words: WordRow[]]; open: [id: string]; position: [index: number] }>();
 const viewport = ref<HTMLElement>();
 const top = ref(0);
 const height = 72;
@@ -49,7 +49,15 @@ function key(event: KeyboardEvent) {
   emit('select', props.words[next]!.id);
   reveal(next);
 }
-function scroll(event: Event) { top.value = (event.target as HTMLElement).scrollTop; }
+function scroll(event: Event) {
+  top.value = (event.target as HTMLElement).scrollTop;
+  emit('position', Math.floor(top.value / height));
+}
+function scrollToIndex(index: number) {
+  viewport.value!.scrollTop = index * height;
+  top.value = viewport.value!.scrollTop;
+}
+defineExpose({ scrollToIndex });
 </script>
 
 <template>

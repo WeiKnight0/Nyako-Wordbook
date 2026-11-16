@@ -37,6 +37,24 @@ function resizeReader(event: MediaQueryListEvent) {
 const readerVisible = computed(() => Boolean(activeId.value) && (readingMode.value && !narrow.value || showDetail.value));
 const activeIndex = computed(() => words.value.findIndex(word => word.id === activeId.value));
 const navigating = ref(false);
+const wordList = ref<InstanceType<typeof WordList>>();
+const listPage = ref(0);
+const pageCount = computed(() => Math.max(1, Math.ceil(total.value / 100)));
+async function changePage(direction: -1 | 1) {
+  if (loading.value || navigating.value) return;
+  const page = listPage.value + direction;
+  if (page < 0 || page >= pageCount.value) return;
+  navigating.value = true;
+  try {
+    if (page * 100 >= words.value.length && !await search(true)) return;
+    const word = words.value[page * 100];
+    if (!word) return;
+    chooseWord(word.id);
+    await nextTick();
+    wordList.value!.scrollToIndex(page * 100);
+    listPage.value = page;
+  } finally { navigating.value = false; }
+}
 const shell = ref<HTMLElement>();
 let active = true;
 function chooseWord(id: string) {
@@ -97,6 +115,9 @@ async function refreshChangedData() {
 }
 watch(() => props.dataRevision, () => { void refreshChangedData(); });
 watch([loading, activeId, readerVisible], () => { if (!loading.value && active && readerVisible.value) void select(activeId.value); });
+watch(words, (rows, previous) => {
+  if (rows[0]?.id !== previous[0]?.id || rows.length < previous.length) listPage.value = 0;
+});
 onActivated(() => { active = true; void refreshChangedData(); if (readerVisible.value) void select(activeId.value); });
 onDeactivated(() => { active = false; exitRequested.value = false; });
 const batchTarget = ref('');
@@ -259,8 +280,8 @@ defineExpose({ modal });
       <section v-if="ready" class="formal-workspace" :class="{ 'reading-workspace': readerVisible, 'reader-page': readerVisible && narrow }">
         <div class="list-panel"><div class="panel-heading"><div><span class="eyebrow">{{ readerVisible ? '词目索引' : '词库浏览' }}</span><h2>{{ total }} 个匹配词条</h2></div><button v-if="activeId && narrow && !showDetail" class="text-button" @click="openWord(activeId)">查看当前词条</button><div class="view-switch" role="group" aria-label="浏览布局"><button :aria-pressed="readingMode" @click="setReading(true)">阅读</button><button :aria-pressed="!readingMode" @click="setReading(false)">列表</button></div></div>
           <p class="list-help">{{ readerVisible ? '↑ ↓ 选择词目 · Enter 聚焦阅读' : '点击词条阅读完整释义与例句' }}</p>
-          <WordList :words="words" :active-id="activeId" :selected="selected" :loading="loading" :readonly="demo" :compact="readerVisible" :reveal-active="navigating" @select="chooseWord" @toggle="toggle" @range="range" @open="openWord" />
-          <footer><span>{{ loading ? '正在更新…' : `已加载 ${words.length} / ${total} 条` }}</span><button v-if="cursor" :disabled="loading" @click="search(true)">加载下一页</button></footer>
+          <WordList ref="wordList" :words="words" :active-id="activeId" :selected="selected" :loading="loading" :readonly="demo" :compact="readerVisible" :reveal-active="navigating" @position="listPage = Math.floor($event / 100)" @select="chooseWord" @toggle="toggle" @range="range" @open="openWord" />
+          <footer><span>{{ loading ? '正在更新…' : `已加载 ${words.length} / ${total} 条` }}</span><nav class="list-pagination" aria-label="词条列表分页"><button :disabled="loading || navigating || listPage === 0" @click="changePage(-1)">上一页</button><span aria-live="polite">第 {{ listPage + 1 }} / {{ pageCount }} 页</span><button :disabled="loading || navigating || listPage + 1 >= pageCount" @click="changePage(1)">下一页</button></nav></footer>
         </div>
         <WordDetailView v-if="readerVisible" :word="detailLoading ? undefined : detail" :libraries="libraries" :readonly="demo" :position="activeIndex + 1" :total="total" :has-previous="activeIndex > 0" :has-next="activeIndex < words.length - 1 || Boolean(cursor)" :navigating="navigating || detailLoading || loading" :error="detailError" @navigate="navigateWord" @retry="select(activeId)" @edit="editWord" @delete="deleteCurrentWord" @close="closeDetail" />
       </section>
