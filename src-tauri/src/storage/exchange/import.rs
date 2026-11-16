@@ -83,25 +83,21 @@ fn changed() -> AppError {
 }
 
 pub(super) fn snapshot(conn: &Connection) -> Result<String, AppError> {
-    let mut result = sha2::Sha256::new();
-    use sha2::Digest;
-    for sql in ["SELECT id,revision FROM words ORDER BY id", "SELECT id,revision FROM libraries ORDER BY id", "SELECT library_id,word_id FROM library_words ORDER BY library_id,word_id", "SELECT source_namespace,external_id,word_id,last_import_hash FROM source_links ORDER BY source_namespace,external_id"] {
-        let mut stmt = conn.prepare(sql)?;
-        let columns = stmt.column_count();
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            for column in 0..columns {
-                let value = match row.get_ref(column)? { rusqlite::types::ValueRef::Text(value) => value.to_vec(), rusqlite::types::ValueRef::Integer(value) => value.to_le_bytes().to_vec(), _ => return Err(AppError::validation("身份快照包含无效数据")) };
-                result.update((value.len() as u64).to_le_bytes());
-                result.update(value);
-            }
-        }
-    }
-    Ok(result
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
+    conn.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS import_connection(value_json TEXT NOT NULL)",
+    )?;
+    conn.execute(
+        "INSERT INTO temp.import_connection SELECT ?1 WHERE NOT EXISTS(SELECT 1 FROM temp.import_connection)",
+        [uuid::Uuid::new_v4().to_string()],
+    )?;
+    Ok(format!(
+        "{}:{}:{}",
+        conn.query_row("SELECT value_json FROM temp.import_connection", [], |row| {
+            row.get::<_, String>(0)
+        })?,
+        conn.total_changes(),
+        conn.query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))?
+    ))
 }
 
 pub(super) fn prepare(conn: &Connection, root: &Path, task: &str) -> Result<(), AppError> {

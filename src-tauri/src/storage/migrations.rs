@@ -92,7 +92,14 @@ fn verify_version(conn: &Connection, scripts: &[&str]) -> Result<usize, AppError
         return Err(invalid("迁移版本不连续或脚本校验和不一致"));
     }
     drop(metadata);
-    verify_integrity(conn)?;
+    if version < scripts.len() as i64 {
+        verify_integrity(conn)?;
+    } else if conn.query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0))? != "ok" {
+        return Err(AppError::new(
+            "DB_CORRUPT",
+            "数据库快速检查失败；原数据已保留",
+        ));
+    }
     Ok(version as usize)
 }
 
