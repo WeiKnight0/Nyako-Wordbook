@@ -246,7 +246,7 @@ fn parse_json(
     }
     envelope["words"] = serde_json::json!([]);
     let document: Document = serde_json::from_value(envelope).map_err(format::json_error)?;
-    if document.format != "nyako-wordbook" || document.version != 2 {
+    if document.format != "nyako-wordbook" || document.version != 1 {
         return Err(AppError::validation("不支持的 JSON 格式或版本"));
     }
     super::validation::text(&document.source_namespace, 1, 1000)?;
@@ -364,12 +364,14 @@ mod format_tests {
     use super::*;
 
     #[test]
-    fn json_rejects_duplicate_keys_unknown_fields_and_bad_relations() {
+    fn json_rejects_duplicate_keys_unknown_fields_and_empty_meaning() {
         assert!(format::strict_json(br#"{"a":1,"a":2}"#).is_err());
-        let mut word: ExchangeWord = serde_json::from_value(serde_json::json!({"kanji":"猫","kana":"ねこ","senses":[{"meaning":"猫"}],"examples":[{"jp":"猫だ","sense_index":2}]})).unwrap();
+        let mut word: ExchangeWord =
+            serde_json::from_value(serde_json::json!({"kanji":"猫","kana":"ねこ","meaning":""}))
+                .unwrap();
         assert!(word.validate().is_err());
         assert!(serde_json::from_value::<ExchangeWord>(
-            serde_json::json!({"kana":"ねこ","senses":[],"card_state":"new"})
+            serde_json::json!({"kana":"ねこ","meaning":"猫","card_state":"new"})
         )
         .is_err());
     }

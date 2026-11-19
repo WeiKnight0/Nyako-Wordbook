@@ -7,22 +7,10 @@ const props = defineProps<{
   position?: number; total?: number; hasPrevious?: boolean; hasNext?: boolean;
   navigating?: boolean; error?: string;
 }>();
-const emit = defineEmits<{ edit: []; delete: []; close: []; navigate: [direction: -1 | 1]; retry: [] }>();
+const emit = defineEmits<{ edit: []; close: []; navigate: [direction: -1 | 1]; retry: [] }>();
 const content = ref<HTMLElement>();
 watch(() => props.word?.content.id, () => { if (content.value) content.value.scrollTop = 0; }, { flush: 'post' });
-const senses = computed(() => props.word?.content.senses.map(sense => ({
-  ...sense, examples: props.word!.content.examples.filter(example => example.sense_id === sense.id),
-})) ?? []);
-const unassigned = computed(() => props.word?.content.examples.filter(example => example.sense_id === null) ?? []);
 const memberships = computed(() => props.libraries.filter(library => props.word?.content.library_ids.includes(library.id)).map(library => library.name).join(' / ') || '未分类');
-const pitches = computed(() => {
-  if (!props.word) return [];
-  // 与存储校验使用同一小假名规则，避免把拗音误判为尾高型。
-  const moraCount = Array.from(props.word.content.kana).filter(char => !/[ゃゅょぁぃぅぇぉャュョァィゥェォ\s]/u.test(char)).length;
-  return props.word.content.pitches.map(pitch => ({
-    ...pitch, label: pitch.downstep === 0 ? '平板型' : pitch.downstep === 1 ? '头高型' : pitch.downstep === moraCount ? '尾高型' : '中高型',
-  }));
-});
 function canNavigate(direction: -1 | 1) {
   return !props.navigating && (direction === -1 ? props.hasPrevious : props.hasNext);
 }
@@ -62,35 +50,14 @@ function key(event: KeyboardEvent) {
             <span v-if="word.content.jlpt" class="detail-chip">{{ word.content.jlpt }}</span>
             <span v-if="word.content.pos.length" class="detail-chip">{{ posLabels(word.content.pos) }}</span>
           </div>
-          <div v-if="pitches.length" class="detail-pitch">
-            <h3>音调</h3>
-            <div class="detail-pitches"><span v-for="pitch in pitches" :key="pitch.id" class="detail-accent"><b>{{ pitch.downstep }}</b> {{ pitch.label }}</span></div>
-            <p>0 表示词内无下降；其他数字表示第几拍后音高下降。</p>
-          </div>
+          <div v-if="word.content.pitch" class="detail-pitch"><h3>音调</h3><p class="plain-text">{{ word.content.pitch }}</p></div>
         </header>
-        <section class="detail-section detail-definitions" aria-label="释义与例句">
-          <h3>释义与用法</h3>
-          <ol class="detail-senses">
-            <li v-for="sense in senses" :key="sense.id" class="detail-sense">
-              <p class="sense-meaning" lang="zh-CN">{{ sense.meaning }}</p>
-              <div v-for="example in sense.examples" :key="example.id" class="detail-example">
-                <p class="example-jp" lang="ja">{{ example.jp }}</p>
-                <p v-if="example.cn" class="example-cn" lang="zh-CN">{{ example.cn }}</p>
-              </div>
-            </li>
-          </ol>
-        </section>
-        <section v-if="unassigned.length" class="detail-section detail-unassigned" aria-label="未关联义项的例句">
-          <h3>其他例句</h3>
-          <div v-for="example in unassigned" :key="example.id" class="detail-example">
-            <p class="example-jp" lang="ja">{{ example.jp }}</p>
-            <p v-if="example.cn" class="example-cn" lang="zh-CN">{{ example.cn }}</p>
-          </div>
-        </section>
+        <section class="detail-section" aria-label="释义"><h3>释义</h3><p class="plain-text">{{ word.content.meaning }}</p></section>
+        <section v-if="word.content.examples_jp" class="detail-section" aria-label="日文例句"><h3>日文例句</h3><p class="plain-text" lang="ja">{{ word.content.examples_jp }}</p></section>
+        <section v-if="word.content.examples_cn" class="detail-section" aria-label="例句中文翻译"><h3>例句中文翻译</h3><p class="plain-text" lang="zh-CN">{{ word.content.examples_cn }}</p></section>
         <footer class="detail-footer">
           <section v-if="word.content.note" class="detail-note"><h3>备注</h3><p class="plain-note" lang="zh-CN">{{ word.content.note }}</p></section>
           <section class="detail-memberships"><h3>所属词库</h3><p>{{ memberships }}</p></section>
-          <button v-if="!readonly" type="button" class="detail-delete" :disabled="navigating" @click="emit('delete')">删除词条</button>
         </footer>
       </template>
     </div>
@@ -99,11 +66,12 @@ function key(event: KeyboardEvent) {
 </template>
 
 <style scoped>
+.plain-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.9; margin: 0; }
 .formal-detail { display: flex; flex-direction: column; min-height: 0; color: #283b33; }
 .detail-key-hint { display: flex; justify-content: space-between; gap: 12px; padding: 10px 22px; border-top: 1px solid #e7ecdf; color: #839079; background: #fafcf8; font-size: 11px; }
 .detail-heading { display: block; margin: 0; }
 .detail-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 16px 22px; border-bottom: 1px solid #e2e9df; background: #f8faf6; }
-.detail-toolbar button, .detail-edit, .detail-delete { border: 0; background: transparent; box-shadow: none; color: #466553; font-size: 12px; padding: 7px 9px; border-radius: 5px; }
+.detail-toolbar button, .detail-edit { border: 0; background: transparent; box-shadow: none; color: #466553; font-size: 12px; padding: 7px 9px; border-radius: 5px; }
 .detail-toolbar button:hover:not([aria-disabled=true]), .detail-edit:hover { background: #e6eee1; }
 .detail-toolbar button[aria-disabled=true] { opacity: .4; cursor: default; }
 .detail-back { white-space: nowrap; }
@@ -118,25 +86,13 @@ function key(event: KeyboardEvent) {
 .detail-chip { border: 1px solid #dce6d7; border-radius: 5px; background: #f4f7ef; padding: 3px 8px; color: #59704d; font-size: 12px; line-height: 1.6; }
 .detail-pitch { margin-top: 20px; }
 .detail-pitch h3, .detail-footer h3 { margin: 0 0 7px; color: #7a877b; font-size: 11px; font-weight: 500; }
-.detail-pitches { display: flex; flex-wrap: wrap; gap: 8px; }
-.detail-accent { font-size: 12px; color: #526951; }
-.detail-accent b { display: inline-block; min-width: 22px; padding: 1px 5px; margin-right: 3px; border: 1px solid #d7e1d0; border-radius: 4px; text-align: center; font-weight: 600; }
 .detail-pitch > p { margin: 8px 0 0; color: #7b877c; font-size: 11px; line-height: 1.7; }
 .detail-section { border-top: 1px solid #e1e8dc; padding: 22px 0 0; margin-top: 24px; }
 .detail-section h3 { margin: 0 0 16px; font-size: 12px; font-weight: 600; color: #61765b; letter-spacing: .05em; }
-.detail-section .detail-senses { padding: 0 0 0 23px; margin: 0; }
-.detail-section .detail-sense { padding: 0 0 0 5px; margin: 0 0 22px; font-size: 16px; line-height: 1.85; }
-.detail-sense::marker { color: #8b9c7c; font-size: 13px; font-variant-numeric: tabular-nums; }
-.sense-meaning { margin: 0 0 12px; white-space: pre-wrap; }
-.detail-example { margin: 10px 0; padding: 12px 15px; border: 1px solid #e7ecdf; border-left: 3px solid #c6d6b6; border-radius: 0 6px 6px 0; background: #f8faf4; }
-.detail-example .example-jp { margin: 0; font-size: 16px; line-height: 1.9; color: #354b38; white-space: pre-wrap; }
-.detail-example .example-cn { margin: 5px 0 0; font-size: 13px; line-height: 1.8; color: #7a8473; white-space: pre-wrap; }
 .detail-footer { margin-top: 26px; padding-top: 20px; border-top: 1px solid #e5eadf; }
 .detail-footer section + section { margin-top: 17px; }
 .detail-footer p { margin: 0; font-size: 12px; line-height: 1.9; color: #7b8677; white-space: pre-wrap; }
-.detail-delete { margin: 18px 0 0 -9px; color: #967267; font-size: 11px; }
-.detail-delete:hover:not(:disabled) { color: #963d32; background: #fcf1ec; }
-.detail-edit:disabled, .detail-delete:disabled { opacity: .4; cursor: default; }
+.detail-edit:disabled:disabled { opacity: .4; cursor: default; }
 .detail-error { margin-bottom: 22px; padding: 16px; border: 1px solid #e7c9bd; border-radius: 6px; background: #fff8f3; color: #8e4a36; }
 .detail-error p { margin: 0 0 12px; font-size: 14px; line-height: 1.8; white-space: pre-wrap; }
 .detail-loading { margin: 30px 0; color: #74836e; font-size: 14px; line-height: 1.8; }

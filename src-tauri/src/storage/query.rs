@@ -218,8 +218,7 @@ pub(super) fn list(
             ORDER BY {null_order}{column} {direction},w.id ASC LIMIT ?
         )
         SELECT w.id,w.kanji,w.kana,
-            (SELECT meaning FROM senses s WHERE s.word_id=w.id ORDER BY position,id LIMIT 1),
-            (SELECT count(*) FROM senses s WHERE s.word_id=w.id),
+            w.meaning,
             w.revision,w.updated_at,w.jlpt,c.state,c.due_at,coalesce(c.suspended,0),c.buried_until
         FROM page p JOIN words w ON w.id=p.id
         LEFT JOIN cards c ON c.word_id=w.id AND c.card_type='recognition'
@@ -243,16 +242,20 @@ pub(super) fn list(
                 id: r.get(0)?,
                 kanji: r.get(1)?,
                 kana: r.get(2)?,
-                meaning: r.get(3)?,
-                sense_count: r.get(4)?,
-                revision: r.get(5)?,
-                updated_at: r.get(6)?,
-                jlpt: r.get(7)?,
+                meaning: r
+                    .get::<_, String>(3)?
+                    .lines()
+                    .find(|line| !line.trim().is_empty())
+                    .unwrap_or("")
+                    .to_owned(),
+                revision: r.get(4)?,
+                updated_at: r.get(5)?,
+                jlpt: r.get(6)?,
                 pos: vec![],
-                card_state: r.get(8)?,
-                due_at: r.get(9)?,
-                suspended: r.get(10)?,
-                buried_until: r.get(11)?,
+                card_state: r.get(7)?,
+                due_at: r.get(8)?,
+                suspended: r.get(9)?,
+                buried_until: r.get(10)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;

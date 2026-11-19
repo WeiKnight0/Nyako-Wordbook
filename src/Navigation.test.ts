@@ -27,11 +27,11 @@ function button(text: string) { return [...host.querySelectorAll<HTMLButtonEleme
 function mount(component: Parameters<typeof createApp>[0] = AppView) { app = createApp(component); app.mount(host); }
 function queries() { return mocks.vocabulary.mock.calls.filter(([request]) => request.operation === 'list_words'); }
 function key(target: Element, value: string, options: KeyboardEventInit = {}) { target.dispatchEvent(new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true, ...options })); }
-function detail(id: string): WordDetail { return { content: { id, kanji: `词${id}`, kana: id, pos: [], pitches: [], senses: [{ id: 'sense', meaning: `释义${id}` }], examples: [], library_ids: [], note: '', jlpt: null }, revision, created_at: 0, updated_at: 0, card_state: null, due_at: null, suspended: false, buried_until: null }; }
+function detail(id: string): WordDetail { return { content: { id, kanji: `词${id}`, kana: id, pos: [], pitch: '', meaning: `释义${id}`, examples_jp: '', examples_cn: '', library_ids: [], note: '', jlpt: null }, revision, created_at: 0, updated_at: 0, card_state: null, due_at: null, suspended: false, buried_until: null }; }
 beforeEach(async () => {
   vi.useFakeTimers();
   revision = 1;
-  rows = Array.from({ length: 150 }, (_, index) => ({ id: String(index), kanji: `词${index}`, kana: String(index), meaning: `释义${index}`, pos: [], sense_count: 1, revision: 1, updated_at: 0, jlpt: null, card_state: null, due_at: null, suspended: false, buried_until: null }));
+  rows = Array.from({ length: 150 }, (_, index) => ({ id: String(index), kanji: `词${index}`, kana: String(index), meaning: `释义${index}`, pos: [], revision: 1, updated_at: 0, jlpt: null, card_state: null, due_at: null, suspended: false, buried_until: null }));
   mocks.vocabulary.mockReset().mockImplementation(request => {
     if (request.operation === 'libraries') return Promise.resolve([{ id: 'library', name: '常用', description: '', archived: false, revision, word_count: rows.length }]);
     if (request.operation === 'get_word') return Promise.resolve(detail(request.id));

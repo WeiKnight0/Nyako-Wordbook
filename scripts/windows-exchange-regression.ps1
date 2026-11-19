@@ -13,9 +13,9 @@ $run=[guid]::NewGuid().ToString()
 $library='原生交换词库-'+$run
 $roundtrip='Excel往返词库-'+$run
 $source=Join-Path $DataRoot ("input-$run.json")
-$cat=@{external_id='native-cat';kanji='受入交換猫';kana='うけいれこうかんねこ';parts_of_speech=@('noun');jlpt='N5';pitch_accents=@(@{downstep=0},@{downstep=2});senses=@(@{meaning='原生导入猫'},@{meaning='备份中的第二义项'});examples=@(@{jp='猫がいます。';cn='有一只猫。';sense_index=0},@{jp='猫を見た。';cn='看见了猫。';sense_index=1});note='恢复基准备注'}
-$dog=@{external_id='native-dog';kanji='受入交換犬';kana='うけいれこうかんいぬ';parts_of_speech=@('noun');jlpt=$null;pitch_accents=@();senses=@(@{meaning='原生导入犬'});examples=@();note='不应出现在单选导出'}
-@{format='nyako-wordbook';version=2;source_namespace="native-exchange-$run";exported_at='2026-11-01T00:00:00Z';words=@($cat,$dog)}|ConvertTo-Json -Depth 8|Set-Content -Encoding UTF8 $source
+$cat=@{external_id='native-cat';kanji='受入交換猫';kana='うけいれこうかんねこ';parts_of_speech=@('noun');jlpt='N5';pitch='0 / 2';meaning="原生导入猫`n`n备份中的第二义项";examples_jp="猫がいます。`n猫を見た。";examples_cn='有一只猫。';note='恢复基准备注'}
+$dog=@{external_id='native-dog';kanji='受入交換犬';kana='うけいれこうかんいぬ';parts_of_speech=@('noun');jlpt=$null;pitch='';meaning='原生导入犬';examples_jp='';examples_cn='';note='不应出现在单选导出'}
+@{format='nyako-wordbook';version=1;source_namespace="native-exchange-$run";exported_at='2026-11-01T00:00:00Z';words=@($cat,$dog)}|ConvertTo-Json -Depth 8|Set-Content -Encoding UTF8 $source
 function Window {
  $condition=New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ProcessIdProperty,$script:process.Id)
  $script:window=[Windows.Automation.AutomationElement]::RootElement.FindFirst([Windows.Automation.TreeScope]::Children,$condition)
@@ -113,11 +113,11 @@ function Select-Word([string]$Writing){
  Click '导出所选词条'
 }
 function Word-Content($Word){
- [ordered]@{kanji=$Word.kanji;kana=$Word.kana;parts_of_speech=@($Word.parts_of_speech);jlpt=$Word.jlpt;pitch_accents=@($Word.pitch_accents|ForEach-Object {[ordered]@{downstep=$_.downstep}});senses=@($Word.senses|ForEach-Object {[ordered]@{meaning=$_.meaning}});examples=@($Word.examples|ForEach-Object {[ordered]@{jp=$_.jp;cn=$_.cn;sense_index=$_.sense_index}});note=$Word.note}|ConvertTo-Json -Depth 8 -Compress
+ [ordered]@{kanji=$Word.kanji;kana=$Word.kana;parts_of_speech=@($Word.parts_of_speech);jlpt=$Word.jlpt;pitch=$Word.pitch;meaning=$Word.meaning;examples_jp=$Word.examples_jp;examples_cn=$Word.examples_cn;note=$Word.note}|ConvertTo-Json -Depth 8 -Compress
 }
 function Assert-Export([string]$Path,$Expected){
  $document=Get-Content -Raw -Encoding UTF8 $Path|ConvertFrom-Json
- if($document.format -cne 'nyako-wordbook' -or $document.version -ne 2 -or !$document.source_namespace -or !$document.exported_at -or @($document.words).Count -ne 1){throw "Invalid single-word JSON export: $Path"}
+ if($document.format -cne 'nyako-wordbook' -or $document.version -ne 1 -or !$document.source_namespace -or !$document.exported_at -or @($document.words).Count -ne 1){throw "Invalid single-word JSON export: $Path"}
  if((Word-Content $document.words[0]) -cne (Word-Content $Expected)){throw "Exported word content mismatch: $Path"}
  if(!$document.words[0].external_id){throw 'Exported stable word identity missing'}
  return $document
@@ -186,7 +186,7 @@ try{
  $script:original=Assert-Export $json $cat
  $xlsx=Join-Path $DataRoot ("export-$run.xlsx")
  Click '导出 Excel';File-Dialog $xlsx;Result 'Excel 已导出：' $xlsx
- Assert-Workbook $xlsx @($script:original.words[0].external_id,$cat.kanji,$cat.kana,"1. 原生导入猫`n2. 备份中的第二义项",'noun','0/2','N5',"1. 猫がいます。`n2. [义项2] 猫を見た。","1. 有一只猫。`n2. 看见了猫。",$cat.note)
+ Assert-Workbook $xlsx @($script:original.words[0].external_id,$cat.kanji,$cat.kana,$cat.meaning,'noun',$cat.pitch,'N5',$cat.examples_jp,$cat.examples_cn,$cat.note)
  Click '导入'
  Fill '文件路径（也可拖入）' $xlsx
  Fill '来源标识' $script:original.source_namespace
@@ -213,18 +213,18 @@ try{
  Assert-Text '(?<!\d)1 个匹配词条'
  Assert-Text '备份中的第二义项'
  Click '编辑词条'
- Fill '义项 1' '备份后已修改的义项'
+ Fill '释义' "备份后已修改的义项`n`n备份中的第二义项"
  Fill '备注' '备份后持久修改'
  Click '保存词条';Click '收回词条详情'
  Click '新增词条'
  Fill '写法（必填）' '受入恢复后增词'
  Fill '假名（必填）' 'うけいれふくごぞうし'
- Fill '义项 1' '只应存在于恢复前的新增词条'
+ Fill '释义' '只应存在于恢复前的新增词条'
  Click '保存词条'
  Close-App;Start-App
- $changed=$cat.Clone();$changed.senses=@(@{meaning='备份后已修改的义项'},@{meaning='备份中的第二义项'});$changed.note='备份后持久修改'
+ $changed=$cat.Clone();$changed.meaning="备份后已修改的义项`n`n备份中的第二义项";$changed.note='备份后持久修改'
  [void](Export-Word 'persisted-after-backup' $changed)
- [void](Export-Word 'persisted-new-word' @{kanji='受入恢复后增词';kana='うけいれふくごぞうし';parts_of_speech=@();jlpt=$null;pitch_accents=@();senses=@(@{meaning='只应存在于恢复前的新增词条'});examples=@();note=''})
+ [void](Export-Word 'persisted-new-word' @{kanji='受入恢复后增词';kana='うけいれふくごぞうし';parts_of_speech=@();jlpt=$null;pitch='';meaning='只应存在于恢复前的新增词条';examples_jp='';examples_cn='';note=''})
  Click '数据管理';Click '备份与恢复'
  Click '选择备份并完整校验';File-Dialog $backup
  (Element '我确认覆盖当前新版数据库中的词库和学习状态' ([Windows.Automation.ControlType]::CheckBox)).GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern).Toggle()

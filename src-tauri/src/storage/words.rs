@@ -9,39 +9,10 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 pub(super) fn get(conn: &Connection, id: &str) -> Result<WordDetail, AppError> {
     validation::id(id)?;
-    let mut detail = conn.query_row("SELECT w.kanji,w.kana,w.jlpt,w.note,w.revision,w.created_at,w.updated_at,c.state,c.due_at,coalesce(c.suspended,0),c.buried_until FROM words w LEFT JOIN cards c ON c.word_id=w.id AND c.card_type='recognition' WHERE w.id=?1", [id], |r| Ok(WordDetail {
-        content: WordInput { id:id.into(),kanji:r.get(0)?,kana:r.get(1)?,jlpt:r.get(2)?,note:r.get(3)?,senses:vec![],examples:vec![],pitches:vec![],pos:vec![],library_ids:vec![] },
+    let mut detail = conn.query_row("SELECT w.kanji,w.kana,w.jlpt,w.note,w.revision,w.created_at,w.updated_at,c.state,c.due_at,coalesce(c.suspended,0),c.buried_until,w.meaning,w.pitch,w.examples_jp,w.examples_cn FROM words w LEFT JOIN cards c ON c.word_id=w.id AND c.card_type='recognition' WHERE w.id=?1", [id], |r| Ok(WordDetail {
+        content: WordInput { id:id.into(),kanji:r.get(0)?,kana:r.get(1)?,jlpt:r.get(2)?,note:r.get(3)?,meaning:r.get(11)?,pitch:r.get(12)?,examples_jp:r.get(13)?,examples_cn:r.get(14)?,pos:vec![],library_ids:vec![] },
         revision:r.get(4)?,created_at:r.get(5)?,updated_at:r.get(6)?,card_state:r.get(7)?,due_at:r.get(8)?,suspended:r.get(9)?,buried_until:r.get(10)?,
     })).optional()?.ok_or_else(missing)?;
-    detail.content.senses = conn
-        .prepare("SELECT id,meaning FROM senses WHERE word_id=?1 ORDER BY position,id")?
-        .query_map([id], |r| {
-            Ok(Sense {
-                id: r.get(0)?,
-                meaning: r.get(1)?,
-            })
-        })?
-        .collect::<Result<_, _>>()?;
-    detail.content.examples = conn
-        .prepare("SELECT id,sense_id,jp,cn FROM examples WHERE word_id=?1 ORDER BY position,id")?
-        .query_map([id], |r| {
-            Ok(Example {
-                id: r.get(0)?,
-                sense_id: r.get(1)?,
-                jp: r.get(2)?,
-                cn: r.get(3)?,
-            })
-        })?
-        .collect::<Result<_, _>>()?;
-    detail.content.pitches = conn
-        .prepare("SELECT id,downstep FROM pitch_accents WHERE word_id=?1 ORDER BY position")?
-        .query_map([id], |r| {
-            Ok(Pitch {
-                id: r.get(0)?,
-                downstep: r.get(1)?,
-            })
-        })?
-        .collect::<Result<_, _>>()?;
     detail.content.pos = strings(
         conn,
         "SELECT pos_code FROM word_pos WHERE word_id=?1 ORDER BY pos_code",
@@ -62,70 +33,7 @@ fn strings(conn: &Connection, sql: &str, id: &str) -> Result<Vec<String>, AppErr
         .collect::<Result<_, _>>()?)
 }
 
-fn owned(conn: &Connection, table: &str, id: &str, word: &str) -> Result<(), AppError> {
-    if conn
-        .query_row(
-            &format!("SELECT word_id FROM {table} WHERE id=?1"),
-            [id],
-            |r| r.get::<_, String>(0),
-        )
-        .optional()?
-        .is_some_and(|owner| owner != word)
-    {
-        return Err(AppError::validation("子记录标识属于其他词条"));
-    }
-    Ok(())
-}
-
-fn sync_children(conn: &Connection, value: &WordInput) -> Result<(), AppError> {
-    for sense in &value.senses {
-        owned(conn, "senses", &sense.id, &value.id)?;
-    }
-    for example in &value.examples {
-        owned(conn, "examples", &example.id, &value.id)?;
-    }
-    for pitch in &value.pitches {
-        owned(conn, "pitch_accents", &pitch.id, &value.id)?;
-    }
-    // 临时偏移保留原身份，并避免互换位置时触发唯一约束。
-    conn.execute(
-        "UPDATE senses SET position=position+1000000 WHERE word_id=?1",
-        [&value.id],
-    )?;
-    conn.execute(
-        "UPDATE examples SET position=position+1000000 WHERE word_id=?1",
-        [&value.id],
-    )?;
-    conn.execute(
-        "UPDATE pitch_accents SET position=position+1000000 WHERE word_id=?1",
-        [&value.id],
-    )?;
-    for (position, sense) in value.senses.iter().enumerate() {
-        conn.execute("INSERT INTO senses VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET position=excluded.position,meaning=excluded.meaning",params![sense.id,value.id,position as i64,sense.meaning])?;
-    }
-    for (position, example) in value.examples.iter().enumerate() {
-        conn.execute("INSERT INTO examples VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(id) DO UPDATE SET sense_id=excluded.sense_id,position=excluded.position,jp=excluded.jp,cn=excluded.cn",params![example.id,value.id,example.sense_id,position as i64,example.jp,example.cn])?;
-    }
-    conn.execute(
-        "DELETE FROM examples WHERE word_id=?1 AND position>=1000000",
-        [&value.id],
-    )?;
-    conn.execute(
-        "DELETE FROM senses WHERE word_id=?1 AND position>=1000000",
-        [&value.id],
-    )?;
-    for old in strings(
-        conn,
-        "SELECT id FROM pitch_accents WHERE word_id=?1",
-        &value.id,
-    )? {
-        if !value.pitches.iter().any(|p| p.id == old) {
-            conn.execute("DELETE FROM pitch_accents WHERE id=?1", [old])?;
-        }
-    }
-    for (position, pitch) in value.pitches.iter().enumerate() {
-        conn.execute("INSERT INTO pitch_accents(id,word_id,downstep,position) VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET downstep=excluded.downstep,position=excluded.position",params![pitch.id,value.id,pitch.downstep,position as i64])?;
-    }
+fn sync_memberships(conn: &Connection, value: &WordInput) -> Result<(), AppError> {
     conn.execute("DELETE FROM word_pos WHERE word_id=?1", [&value.id])?;
     for pos in &value.pos {
         conn.execute("INSERT INTO word_pos VALUES(?1,?2)", params![value.id, pos])?;
@@ -168,21 +76,21 @@ pub(super) fn save_in_transaction(
     let time = now()?;
     let search = std::iter::once(&value.kanji)
         .chain(std::iter::once(&value.kana))
-        .chain(value.senses.iter().map(|s| &s.meaning))
+        .chain(std::iter::once(&value.meaning))
         .chain(std::iter::once(&value.note))
         .map(|s| normalize(s))
         .collect::<Vec<_>>()
         .join("\n");
     match expected {
             None => {
-                tx.execute("INSERT INTO words(id,kanji,kana,jlpt,note,search_text,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?7)",params![value.id,value.kanji,value.kana,value.jlpt,value.note,search,time])?;
+                tx.execute("INSERT INTO words(id,kanji,kana,jlpt,note,search_text,created_at,updated_at,meaning,pitch,examples_jp,examples_cn) VALUES(?1,?2,?3,?4,?5,?6,?7,?7,?8,?9,?10,?11)",params![value.id,value.kanji,value.kana,value.jlpt,value.note,search,time,value.meaning,value.pitch,value.examples_jp,value.examples_cn])?;
                 tx.execute("INSERT INTO cards(id,word_id,card_type,state,scheduler_version,parameter_set_id,eligible_since) VALUES(?1,?2,'recognition','new','6.6.2','fsrs6-default',?3)",params![uuid::Uuid::new_v4().to_string(),value.id,time])?;
             }
             Some(revision) => {
-                if tx.execute("UPDATE words SET kanji=?1,kana=?2,jlpt=?3,note=?4,search_text=?5,updated_at=?6,revision=revision+1 WHERE id=?7 AND revision=?8",params![value.kanji,value.kana,value.jlpt,value.note,search,time,value.id,revision])? != 1 { return Err(conflict()); }
+                if tx.execute("UPDATE words SET kanji=?1,kana=?2,jlpt=?3,note=?4,search_text=?5,updated_at=?6,revision=revision+1 ,meaning=?9,pitch=?10,examples_jp=?11,examples_cn=?12 WHERE id=?7 AND revision=?8",params![value.kanji,value.kana,value.jlpt,value.note,search,time,value.id,revision,value.meaning,value.pitch,value.examples_jp,value.examples_cn])? != 1 { return Err(conflict()); }
             }
         }
-    sync_children(tx, &value)?;
+    sync_memberships(tx, &value)?;
     get(tx, &value.id)
 }
 

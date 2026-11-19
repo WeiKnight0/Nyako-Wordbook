@@ -83,7 +83,7 @@ function Close-App {
 }
 Start-App
 try{
- foreach($name in @('新建词库','新增词条','查看当前词条','加载下一页')){
+ foreach($name in @('新建词库','新增词条','查看当前词条','下一页')){
   [void][NyakoWindow]::SetForegroundWindow($script:window.Current.NativeWindowHandle)
   Start-Sleep -Milliseconds 150
   $element=Wait-Element $name ([Windows.Automation.ControlType]::Button)
@@ -111,13 +111,10 @@ try{
  Click '新增词条'
  Fill '写法（必填）' '回帰テスト'
  Fill '假名（必填）' 'かいきてすと'
- Fill '义项 1' '原生回归首义项'
- Click '新增义项'
- Fill '义项 2' '第二义项'
- Click '例句'
- Click '新增例句'
- Fill '日文例句' '毎日働く'
- Fill '中文翻译（可空）' '每天工作'
+ Fill '释义' "原生回归首义项`n`n第二义项"
+ Fill '音调' '平板 / 2'
+ Fill '日文例句' "毎日働く`n生活する"
+ Fill '例句中文翻译' '每天工作'
  Click '所属词库'
  foreach($library in @('基准主库','共享词库')){
   $box=Wait-Element $library ([Windows.Automation.ControlType]::CheckBox)
@@ -129,7 +126,7 @@ try{
  [void](Wait-Element '选择 回帰テスト' ([Windows.Automation.ControlType]::CheckBox))
  Click '查看当前词条'
  Click '编辑词条'
- foreach($field in @(@('写法（必填）','回帰テスト'),@('假名（必填）','かいきてすと'),@('义项 1','原生回归首义项'),@('义项 2','第二义项'),@('日文例句','毎日働く'),@('中文翻译（可空）','每天工作'))){
+ foreach($field in @(@('写法（必填）','回帰テスト'),@('假名（必填）','かいきてすと'),@('释义',"原生回归首义项`n`n第二义项"),@('音调','平板 / 2'),@('日文例句',"毎日働く`n生活する"),@('例句中文翻译','每天工作'))){
   if((Wait-Element $field[0] ([Windows.Automation.ControlType]::Edit)).GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value -cne $field[1]){throw "Saved word mismatch: $($field[0])"}
  }
  foreach($library in @('基准主库','共享词库')){
@@ -151,18 +148,19 @@ try{
  Click '加入词库'
  $selection=Wait-Element '选择 回帰テスト' ([Windows.Automation.ControlType]::CheckBox)
  $selection.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern).Toggle()
- Click '永久删除词条…'
- Click '取消'
- Click '永久删除词条…'
- Click '我已了解，继续确认'
- Click '确认执行'
+ Click '查看当前词条'
+ Click '编辑词条'
+ Click '删除词条'
+ Click '继续编辑'
+ Click '删除词条'
+ Click '确认删除'
  Start-Sleep -Milliseconds 500
  if(Find-Element '选择 回帰テスト' ([Windows.Automation.ControlType]::CheckBox)){throw 'Deleted word remains in list'}
  $text=$script:window.FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.Condition]::TrueCondition)|ForEach-Object {$_.Current.Name}
  if('0 个匹配词条' -notin $text){throw 'Deleted word still matches search'}
  Fill '搜索真实词条' ''
  Start-Sleep -Milliseconds 500
- $log+=@{case='word/create/writing/two-senses/example/shared/batch-remove-add/delete-cancel/two-confirmations';passed=$true}
+ $log+=@{case='word/create/writing/multiline-text/shared/batch-remove-add/editor-delete-cancel-confirm';passed=$true}
  Click '新建词库'
  Fill '词库名称 最多 100 个字符' '回归词库甲'
  Fill '描述' '原生关闭保存与重开验证'

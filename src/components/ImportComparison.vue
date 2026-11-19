@@ -3,15 +3,13 @@ import { computed } from 'vue';
 import { partsOfSpeech } from '../vocabulary';
 
 const props = defineProps<{ incoming: Record<string, unknown>; existing?: Record<string, unknown>; present: string[] }>();
-const labels: Record<string, string> = { kanji: '写法', kana: '假名', parts_of_speech: '词性', jlpt: 'JLPT', pitch_accents: '音调', senses: '释义', examples: '例句', note: '备注' };
+const labels: Record<string, string> = { kanji: '写法', kana: '假名', parts_of_speech: '词性', jlpt: 'JLPT', pitch: '音调', meaning: '释义', examples_jp: '日文例句', examples_cn: '例句中文翻译', note: '备注' };
 const fields = computed(() => Object.keys(labels).filter(field => props.present.includes(field)));
 function display(field: string, value: unknown): string {
   if (value == null || value === '' || Array.isArray(value) && !value.length) return '（空）';
   if (!Array.isArray(value)) return String(value);
   if (field === 'parts_of_speech') return value.map(code => partsOfSpeech.find(([id]) => id === code)?.[1] ?? code).join(' / ');
-  if (field === 'pitch_accents') return value.map(pitch => pitch.downstep).join(' / ');
-  if (field === 'senses') return value.map((sense, index) => `${index + 1}. ${sense.meaning}`).join('\n');
-  return value.map((example, index) => `${index + 1}. ${example.jp}${example.cn ? `\n${example.cn}` : ''}\n${example.sense_index == null ? '不关联义项' : `关联义项 ${example.sense_index + 1}`}`).join('\n\n');
+  return value.join(' / ');
 }
 </script>
 

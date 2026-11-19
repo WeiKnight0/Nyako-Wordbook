@@ -11,18 +11,15 @@ fn content() -> WordInput {
         kana: "はたらく".into(),
         jlpt: Some("N3".into()),
         note: "plain note".into(),
-        senses: vec![
-            Sense {
-                id: id(),
-                meaning: "工作；劳动".into(),
-            },
-            Sense {
-                id: id(),
-                meaning: "发挥作用".into(),
-            },
-        ],
-        examples: vec![],
-        pitches: vec![],
+        meaning: "工作；劳动
+发挥作用"
+            .into(),
+        examples_jp: "毎日働く。
+
+生活する。"
+            .into(),
+        examples_cn: "每天工作。".into(),
+        pitch: "0 / 2；平板型".into(),
         pos: vec!["godan_verb".into()],
         library_ids: vec![],
     }
@@ -46,11 +43,7 @@ fn verb_transitivity_is_optional_exclusive_and_requires_verb_form() {
 
 fn database() -> (tempfile::TempDir, Connection) {
     let dir = tempfile::tempdir().unwrap();
-    let conn = migrations::open_database(
-        &dir.path().join("main.sqlite3"),
-        &dir.path().join("backups"),
-    )
-    .unwrap();
+    let conn = migrations::open_database(&dir.path().join("main.sqlite3")).unwrap();
     query::register(&conn).unwrap();
     (dir, conn)
 }
@@ -106,62 +99,43 @@ fn editing_reviewed_word_preserves_every_card_and_history_column() {
     let cards = snapshot(&conn, "cards");
     let events = snapshot(&conn, "review_events");
     let mut changed = saved.content;
-    changed.senses[0].meaning = "修改释义".into();
+    changed.meaning = "修改释义".into();
     words::save(&mut conn, changed, Some(saved.revision)).unwrap();
     assert_eq!(cards, snapshot(&conn, "cards"));
     assert_eq!(events, snapshot(&conn, "review_events"));
 }
 
 #[test]
-fn aggregate_reorders_preserve_ids_examples_and_card() {
+fn text_roundtrip_limits_and_revision_conflicts() {
     let (_dir, mut conn) = database();
-    let mut input = content();
-    input.pitches = vec![
-        Pitch {
-            id: id(),
-            downstep: 1,
-        },
-        Pitch {
-            id: id(),
-            downstep: 2,
-        },
-    ];
-    input.examples.push(Example {
-        id: id(),
-        sense_id: Some(input.senses[0].id.clone()),
-        jp: "働く".into(),
-        cn: None,
-    });
-    let saved = words::save(&mut conn, input, None).unwrap();
-    let card=conn.query_row("SELECT json_object('id',id,'state',state,'due',due_at,'revision',revision,'params',parameter_set_id) FROM cards",[],|r|r.get::<_,String>(0)).unwrap();
-    let mut changed = saved.content.clone();
-    changed.senses.reverse();
-    changed.pitches.reverse();
-    let updated = words::save(&mut conn, changed, Some(saved.revision)).unwrap();
-    assert_eq!(updated.content.senses[1].id, saved.content.senses[0].id);
-    assert_eq!(updated.content.pitches[0].id, saved.content.pitches[1].id);
-    let mut changed = updated.content.clone();
-    changed
-        .senses
-        .retain(|s| s.id != saved.content.senses[0].id);
-    changed.examples[0].sense_id = None;
-    let updated = words::save(&mut conn, changed, Some(updated.revision)).unwrap();
-    assert_eq!(updated.content.examples[0].id, saved.content.examples[0].id);
-    assert_eq!(updated.content.examples[0].sense_id, None);
-    assert_eq!(card,conn.query_row("SELECT json_object('id',id,'state',state,'due',due_at,'revision',revision,'params',parameter_set_id) FROM cards",[],|r|r.get::<_,String>(0)).unwrap());
+    let input = content();
+    let saved = words::save(&mut conn, input.clone(), None).unwrap();
+    assert_eq!(saved.content, input);
+    let mut changed = input;
+    changed.meaning = "1. 工作
+
+随意编号，不配对例句"
+        .into();
+    let updated = words::save(&mut conn, changed.clone(), Some(1)).unwrap();
+    assert_eq!(updated.content, changed);
+    assert!(words::save(&mut conn, changed.clone(), Some(1)).is_err());
+    changed.meaning.clear();
+    assert!(words::save(&mut conn, changed, Some(updated.revision)).is_err());
     assert_eq!(
-        words::save(&mut conn, updated.content.clone(), Some(1))
-            .unwrap_err()
-            .code,
-        "REVISION_CONFLICT"
+        words::get(&conn, &updated.content.id).unwrap().content,
+        updated.content
     );
-    let mut invalid = updated.content.clone();
-    invalid.senses.clear();
-    assert!(words::save(&mut conn, invalid, Some(updated.revision)).is_err());
-    assert_eq!(
-        words::get(&conn, &updated.content.id).unwrap().revision,
-        updated.revision
-    );
+    for field in ["meaning", "examples_jp", "examples_cn", "note"] {
+        let mut json = serde_json::to_value(content()).unwrap();
+        json[field] = "文".repeat(100_000).into();
+        let value: WordInput = serde_json::from_value(json.clone()).unwrap();
+        super::validation::word(value).unwrap();
+        json[field] = "文".repeat(100_001).into();
+        assert!(super::validation::word(serde_json::from_value(json).unwrap()).is_err());
+    }
+    let mut irregular = content();
+    irregular.pos = vec!["irregular_verb".into(), "transitive".into()];
+    words::save(&mut conn, irregular, None).unwrap();
 }
 
 #[test]
@@ -194,11 +168,7 @@ fn shared_memberships_batch_and_reopen() {
     assert!(words::batch(&mut conn, selected, "delete", None).is_err());
     assert!(words::get(&conn, &updated.content.id).is_ok());
     drop(conn);
-    let conn = migrations::open_database(
-        &dir.path().join("main.sqlite3"),
-        &dir.path().join("backups"),
-    )
-    .unwrap();
+    let conn = migrations::open_database(&dir.path().join("main.sqlite3")).unwrap();
     assert_eq!(
         words::get(&conn, &saved.content.id).unwrap().content.kana,
         "はたらく"
@@ -253,9 +223,8 @@ fn broad_search_fallback_preserves_results_and_cursors() {
     let (_dir, conn) = database();
     conn.execute_batch(
         "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<10001)
-        INSERT INTO words(id,kanji,kana,search_text,created_at,updated_at)
-        SELECT printf('00000000-0000-4000-8000-%012x',i),'働く','はたらく','働く はたらく',1,i FROM n;
-        INSERT INTO senses(id,word_id,position,meaning) SELECT id,id,0,'工作' FROM words;",
+        INSERT INTO words(id,kanji,kana,meaning,search_text,created_at,updated_at)
+        SELECT printf('00000000-0000-4000-8000-%012x',i),'働く','はたらく','工作','働く はたらく',1,i FROM n;",
     )
     .unwrap();
     let mut q = filter();
@@ -292,24 +261,5 @@ fn search_index_refresh_and_delete_impact() {
         conn.query_row("SELECT count(*) FROM cards", [], |r| r.get::<_, i64>(0))
             .unwrap(),
         0
-    );
-}
-
-#[test]
-fn foreign_child_ids_and_partial_updates_are_rejected() {
-    let (_dir, mut conn) = database();
-    let first = words::save(&mut conn, content(), None).unwrap();
-    let mut second = content();
-    second.senses[0].id = first.content.senses[0].id.clone();
-    assert!(words::save(&mut conn, second, None).is_err());
-    assert_eq!(
-        conn.query_row("SELECT count(*) FROM words", [], |r| r.get::<_, i64>(0))
-            .unwrap(),
-        1
-    );
-    assert_eq!(
-        conn.query_row("SELECT count(*) FROM cards", [], |r| r.get::<_, i64>(0))
-            .unwrap(),
-        1
     );
 }

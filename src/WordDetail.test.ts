@@ -8,8 +8,7 @@ let host: HTMLDivElement;
 const entry = (): Entry => ({
   content: {
     id: 'word', kanji: '開く', kana: 'ひらく', jlpt: 'N4', note: '',
-    senses: [{ id: 'open', meaning: '打开' }, { id: 'hold', meaning: '举办' }],
-    examples: [], pitches: [], pos: ['godan_verb', 'transitive'], library_ids: [],
+    meaning: '打开\n\n举办', examples_jp: '', examples_cn: '', pitch: '', pos: ['godan_verb', 'transitive'], library_ids: [],
   },
   revision: 1, created_at: 1, updated_at: 1, card_state: null, due_at: null, suspended: false, buried_until: null,
 });
@@ -29,25 +28,14 @@ const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[
 beforeEach(() => { host = document.createElement('div'); document.body.append(host); });
 afterEach(() => { app.unmount(); host.remove(); });
 
-test('examples follow their stable sense IDs, preserving sense order, example order and whitespace', () => {
+test('free text preserves whitespace, numbering and independent translations', () => {
   const word = entry();
-  word.content.senses[0]!.meaning = ' 打开\n  使张开 ';
-  word.content.examples = [
-    { id: 'hold-1', sense_id: 'hold', jp: '会を開く。', cn: '举办会议。' },
-    { id: 'free-1', sense_id: null, jp: ' その他\n  の例 ', cn: null },
-    { id: 'open-1', sense_id: 'open', jp: ' 窓を\n  開く。 ', cn: ' 打开\n  窗户。 ' },
-    { id: 'open-2', sense_id: 'open', jp: '本を開く。', cn: null },
-    { id: 'free-2', sense_id: null, jp: '別の例。', cn: '' },
-  ];
+  Object.assign(word.content, { meaning: ' 打开\n\n3. 举办 ', examples_jp: ' 窓を\n  開く。\n本を開く。 ', examples_cn: ' 只有一句中文。 ' });
   mount({ word });
-  const senses = [...host.querySelectorAll('.detail-sense')];
-  expect(senses.map(sense => sense.querySelector('.sense-meaning')!.textContent)).toEqual([' 打开\n  使张开 ', '举办']);
-  expect([...senses[0]!.querySelectorAll('.example-jp')].map(node => node.textContent)).toEqual([' 窓を\n  開く。 ', '本を開く。']);
-  expect(senses[0]!.querySelector('.example-cn')!.textContent).toBe(' 打开\n  窗户。 ');
-  expect(senses[0]!.querySelectorAll('.example-cn')).toHaveLength(1);
-  expect(senses[1]!.querySelector('.example-jp')!.textContent).toBe('会を開く。');
-  expect([...host.querySelectorAll('.detail-unassigned .example-jp')].map(node => node.textContent)).toEqual([' その他\n  の例 ', '別の例。']);
-  expect(host.querySelectorAll('.detail-example')).toHaveLength(5);
+  expect(host.querySelector('[aria-label="释义"] .plain-text')!.textContent).toBe(word.content.meaning);
+  expect(host.querySelector('[aria-label="日文例句"] .plain-text')!.textContent).toBe(word.content.examples_jp);
+  expect(host.querySelector('[aria-label="例句中文翻译"] .plain-text')!.textContent).toBe(word.content.examples_cn);
+  expect(host.querySelector('.detail-delete')).toBeNull();
 });
 
 test('toolbar exposes full result position and respects both boundaries and pending navigation', async () => {
@@ -144,7 +132,7 @@ test('failed detail can retry and transitions through loading into a complete en
 
 test.each(['', 'ありがとう'])('kana-only entries avoid duplicate readings and omit empty optional fields (writing: %s)', kanji => {
   const word = entry();
-  Object.assign(word.content, { kanji, kana: 'ありがとう', jlpt: null, pos: [], note: '', examples: [], pitches: [] });
+  Object.assign(word.content, { kanji, kana: 'ありがとう', jlpt: null, pos: [], note: '', examples_jp: '', examples_cn: '', pitch: '' });
   mount({ word, readonly: true });
   expect(host.querySelector('h2')!.textContent).toBe('ありがとう');
   expect(host.querySelector('.detail-reading')).toBeNull();
@@ -168,13 +156,12 @@ test('moving to another entry resets reading scroll without taking focus from na
   expect(document.activeElement).toBe(next);
 });
 
-test('pitch names use the stored small-kana mora rules without inventing a contour', () => {
+test('pitch and notes display their original text', () => {
   const word = entry();
   Object.assign(word.content, { kana: 'きゃ っこう', note: ' 第一行\n  第二行 ', library_ids: ['library'] });
-  word.content.pitches = [0, 1, 2, 4].map(downstep => ({ id: `pitch-${downstep}`, downstep }));
+  word.content.pitch = '0 / 2、平板型（自记）';
   mount({ word, libraries: [{ id: 'library', name: '日常\n  用语', description: '', archived: false, revision: 1, word_count: 1 }] });
-  expect([...host.querySelectorAll('.detail-accent')].map(node => node.textContent)).toEqual(['0 平板型', '1 头高型', '2 中高型', '4 尾高型']);
-  expect(host.querySelector('.detail-pitch')!.textContent).toContain('0 表示词内无下降；其他数字表示第几拍后音高下降');
+  expect(host.querySelector('.detail-pitch .plain-text')!.textContent).toBe(word.content.pitch);
   expect(host.querySelector('.plain-note')!.textContent).toBe(' 第一行\n  第二行 ');
   expect(host.querySelector('.detail-memberships p')!.textContent).toBe('日常\n  用语');
   expect(host.querySelector('.detail-meta')!.textContent).toContain('N4');

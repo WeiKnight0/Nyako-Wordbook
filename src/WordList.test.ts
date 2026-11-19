@@ -8,7 +8,7 @@ let host: HTMLDivElement;
 function row(index: number): WordRow {
   return {
     id: String(index), kanji: `词${index}`, kana: String(index), meaning: `释义${index}`,
-    sense_count: 1, revision: 1, updated_at: 0, jlpt: null, pos: [], card_state: null,
+    revision: 1, updated_at: 0, jlpt: null, pos: [], card_state: null,
     due_at: null, suspended: false, buried_until: null,
   };
 }

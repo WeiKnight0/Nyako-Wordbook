@@ -84,7 +84,7 @@ test('single-sheet Excel previews ten columns without mapping', async () => {
   button('查看样本').click(); await settle();
   expect(host.textContent).toContain('ねこ');
   button('全量校验并预览').click(); await settle();
-  expect(mocks.invoke).toHaveBeenCalledWith('exchange', { request: { operation:'preview', path:'/words.xlsx', options:{ source_namespace:'nyako:excel:local',excel:{sheet:null,headers:true,columns:{},pos_mapping:{}} } } });
+  expect(mocks.invoke).toHaveBeenCalledWith('exchange', { request: { operation:'preview', path:'/words.xlsx', options:{ source_namespace:'nyako:excel:local',excel:{sheet:null,headers:true} } } });
 });
 
 test('explicit selection exports ids without a library scope', async () => {
@@ -160,7 +160,7 @@ test('whole-file conflicts block commit and can be located beyond the first page
   let pageOffset = 0;
   mocks.invoke.mockImplementation(async (command, args) => {
     if (command === 'exchange') { if (args.request.operation === 'page') pageOffset = args.request.offset; return { job_id: args.request.operation }; }
-    if (command === 'exchange_status') return { state: 'completed', result: args.id === 'preview' ? previewResult({ valid: 51, total: 51 }) : args.id === 'import_summary' ? summaryResult({ new: 50, ambiguous: 1, unresolved_lines: [51] }) : pageOffset === 50 ? [{ line: 51, classification: 'ambiguous', present: ['kanji', 'kana', 'senses'], content: { kanji: '猫', kana: 'ねこ', senses: [{ meaning: '猫' }] }, candidates: [{ id: 'existing', kana: 'ねこ', meaning: '猫', content: {} }], matched: null }] : [] };
+    if (command === 'exchange_status') return { state: 'completed', result: args.id === 'preview' ? previewResult({ valid: 51, total: 51 }) : args.id === 'import_summary' ? summaryResult({ new: 50, ambiguous: 1, unresolved_lines: [51] }) : pageOffset === 50 ? [{ line: 51, classification: 'ambiguous', present: ['kanji', 'kana', 'meaning'], content: { kanji: '猫', kana: 'ねこ', meaning: '猫' }, candidates: [{ id: 'existing', kana: 'ねこ', meaning: '猫', content: {} }], matched: null }] : [] };
   });
   fill('文件路径', '/source.json'); await settle();
   button('全量校验并预览').click(); await settle(); fill('新建词库', '目标'); await settle();

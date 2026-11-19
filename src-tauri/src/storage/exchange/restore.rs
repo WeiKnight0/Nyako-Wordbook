@@ -128,7 +128,7 @@ pub(crate) fn recover(root: &Path) -> Result<(), AppError> {
         }
     }
     let validation = if root.join("data/main.sqlite3").is_file() {
-        migrations::open_database(&root.join("data/main.sqlite3"), &root.join("backups"))
+        migrations::open_database(&root.join("data/main.sqlite3"))
     } else {
         Err(AppError::new(
             "RESTORE_FAILED",

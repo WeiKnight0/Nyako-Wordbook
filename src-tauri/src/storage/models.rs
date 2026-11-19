@@ -13,35 +13,6 @@ pub struct Library {
     pub word_count: i64,
 }
 
-/// @description 带稳定身份的义项。
-/// @param 不适用，数据契约。
-/// @throws 不适用。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Sense {
-    pub id: String,
-    pub meaning: String,
-}
-
-/// @description 可选关联义项的例句。
-/// @param 不适用，数据契约。
-/// @throws 不适用。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Example {
-    pub id: String,
-    pub sense_id: Option<String>,
-    pub jp: String,
-    pub cn: Option<String>,
-}
-
-/// @description 按拍数记录下降位置，零表示平板型。
-/// @param 不适用，数据契约。
-/// @throws 不适用。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Pitch {
-    pub id: String,
-    pub downstep: i64,
-}
-
 /// @description 一次原子保存的词条内容聚合。
 /// @param 不适用，数据契约。
 /// @throws 不适用。
@@ -52,9 +23,10 @@ pub struct WordInput {
     pub kana: String,
     pub jlpt: Option<String>,
     pub note: String,
-    pub senses: Vec<Sense>,
-    pub examples: Vec<Example>,
-    pub pitches: Vec<Pitch>,
+    pub meaning: String,
+    pub pitch: String,
+    pub examples_jp: String,
+    pub examples_cn: String,
     pub pos: Vec<String>,
     pub library_ids: Vec<String>,
 }
@@ -83,7 +55,6 @@ pub struct WordRow {
     pub kanji: String,
     pub kana: String,
     pub meaning: String,
-    pub sense_count: i64,
     pub revision: i64,
     pub updated_at: i64,
     pub jlpt: Option<String>,

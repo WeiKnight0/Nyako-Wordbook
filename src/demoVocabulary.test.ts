@@ -17,42 +17,29 @@ test('browser samples retain their identifiers, memberships, ordering and list m
     expect(word).toMatchObject({ id: `demo-${index}`, revision: 1, updated_at: index, jlpt: 'N5', card_state: null, due_at: null, suspended: false, buried_until: null });
     expect(demoDetail(word.id).content.library_ids).toEqual([index < 5 ? 'demo-basic' : 'demo-life']);
   });
-  expect(demoDetail('demo-0').content.senses[0]?.meaning).toBe('学校');
+  expect(demoDetail('demo-0').content.meaning.split('\n')[0]).toBe('学校');
 });
 
-test('every sense has a translated example linked to its own stable identifier', () => {
-  const childIds: string[] = [];
+test('sample content is direct text with stable word identifiers', () => {
   demoWords.forEach(word => {
     const detail = demoDetail(word.id);
-    const { senses, examples, pitches, note } = detail.content;
-    expect(detail).toMatchObject({ revision: 1, created_at: 0, updated_at: word.updated_at, card_state: null, due_at: null, suspended: false, buried_until: null });
-    expect(detail.content).toMatchObject({ id: word.id, kanji: word.kanji, kana: word.kana, jlpt: word.jlpt, pos: word.pos });
-    expect(senses).toHaveLength(word.sense_count);
-    expect(senses[0]).toEqual({ id: `sense-${word.id}`, meaning: word.meaning });
-    expect(examples).toHaveLength(senses.length);
-    expect(note.trim()).not.toBe('');
-    senses.forEach(sense => {
-      expect(sense.meaning.trim()).not.toBe('');
-      expect(examples.filter(example => example.sense_id === sense.id)).toHaveLength(1);
-    });
-    examples.forEach(example => {
-      expect(example.jp.trim()).not.toBe('');
-      expect(example.cn?.trim()).toBeTruthy();
-    });
-    childIds.push(...[...senses, ...examples, ...pitches].map(child => child.id));
+    expect(detail.content).toMatchObject({ id: word.id, kanji: word.kanji, kana: word.kana, pos: word.pos });
+    const { meaning, pitch, examples_jp, examples_cn, note } = detail.content;
+    expect(meaning.split('\n')[0]).toBe(word.meaning);
+    [meaning, examples_jp, examples_cn, note].forEach(value => expect(value.trim()).not.toBe(''));
+    expect(typeof pitch).toBe('string');
     expect(demoDetail(word.id)).toEqual(detail);
   });
-  expect(new Set(childIds).size).toBe(childIds.length);
 });
 
-test.each(['demo-0', 'demo-3', 'demo-4', 'demo-6'])('%s demonstrates multiple senses with corresponding examples and notes', id => {
-  expect(demoDetail(id).content.senses.length).toBeGreaterThan(1);
+test.each(['demo-0', 'demo-3', 'demo-4', 'demo-6'])('%s demonstrates multiline meanings', id => {
+  expect(demoDetail(id).content.meaning).toContain('\n\n');
 });
 
 test('only the known Tokyo pitch for 食べる is supplied', () => {
-  expect(demoDetail('demo-3').content.pitches).toEqual([{ id: 'pitch-demo-3-0', downstep: 2 }]);
+  expect(demoDetail('demo-3').content.pitch).toBe('2');
   demoWords.filter(word => word.id !== 'demo-3').forEach(word => {
-    expect(demoDetail(word.id).content.pitches).toEqual([]);
+    expect(demoDetail(word.id).content.pitch).toBe('');
   });
 });
 

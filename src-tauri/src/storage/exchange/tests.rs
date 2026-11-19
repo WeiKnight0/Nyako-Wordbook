@@ -120,8 +120,8 @@ fn excel_single_sheet_roundtrip_and_reimport_preserve_cards() {
     );
     let content = super::import::page(&second, empty.path(), &task.task_id, 0, false).unwrap();
     assert_eq!(
-        content[0].content.as_ref().unwrap()["examples"][0]["sense_index"],
-        0
+        content[0].content.as_ref().unwrap()["examples_jp"],
+        "猫がいます。"
     );
     let word_id: String = second
         .query_row("SELECT id FROM words", [], |row| row.get(0))
@@ -137,7 +137,7 @@ fn excel_single_sheet_roundtrip_and_reimport_preserve_cards() {
             .unwrap()
             .into(),
     );
-    changed.senses[0].meaning = "猫科动物".into();
+    changed.meaning = "猫科动物".into();
     changed.note = "Excel 修改后的备注".into();
     super::excel::write(
         &output,
@@ -153,7 +153,7 @@ fn excel_single_sheet_roundtrip_and_reimport_preserve_cards() {
         action: "reuse".into(),
         target: Some(word_id.clone()),
         strategy: "replace".into(),
-        fields: ["senses".into(), "examples".into(), "note".into()]
+        fields: ["meaning".into(), "examples_jp".into(), "note".into()]
             .into_iter()
             .collect(),
         clear: Default::default(),
@@ -171,12 +171,8 @@ fn excel_single_sheet_roundtrip_and_reimport_preserve_cards() {
         1
     );
     let detail = crate::storage::words::get(&second, &word_id).unwrap();
-    assert_eq!(detail.content.senses.len(), 1);
-    assert_eq!(detail.content.senses[0].meaning, "猫科动物");
-    assert_eq!(
-        detail.content.examples[0].sense_id.as_ref(),
-        Some(&detail.content.senses[0].id)
-    );
+    assert_eq!(detail.content.meaning, "猫科动物");
+    assert_eq!(detail.content.examples_jp, "猫がいます。");
     assert_eq!(detail.content.note, "Excel 修改后的备注");
 }
 
@@ -249,13 +245,10 @@ fn json_export_rejects_oversized_local_aggregate_before_publishing() {
     let document: super::format::Document =
         serde_json::from_slice(&std::fs::read(file(root.path())).unwrap()).unwrap();
     let mut input = document.words[0].input().unwrap();
-    input.senses = (0..40)
-        .map(|_| crate::storage::models::Sense {
-            id: super::format::id(),
-            meaning: "释".repeat(10_000),
-        })
-        .collect();
-    input.examples.clear();
+    input.meaning = "释".repeat(100_000);
+    input.examples_jp = "日".repeat(100_000);
+    input.examples_cn = "中".repeat(100_000);
+    input.note = "注".repeat(100_000);
     let saved = crate::storage::words::save(&mut conn, input, None).unwrap();
     for existing in [false, true] {
         let output = root.path().join(if existing {
@@ -331,7 +324,6 @@ fn excel_plain_chinese_sheet_maps_and_rejects_formulas() {
         excel: super::excel::ExcelOptions {
             sheet: Some("单词表".into()),
             headers: true,
-            ..Default::default()
         },
     };
     let task = preview(root.path(), &path, &options).unwrap();
@@ -342,8 +334,8 @@ fn excel_plain_chinese_sheet_maps_and_rejects_formulas() {
         .query_row("SELECT content FROM rows", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&word).unwrap()["pitch_accents"][0]["downstep"],
-        1
+        serde_json::from_str::<serde_json::Value>(&word).unwrap()["pitch"],
+        "1"
     );
     assert_eq!(
         conn.query_row("SELECT count(*) FROM words", [], |row| row.get::<_, i64>(0))
@@ -362,19 +354,13 @@ fn excel_plain_chinese_sheet_maps_and_rejects_formulas() {
 }
 
 #[test]
-fn excel_rejects_missing_required_values_and_invalid_pitch() {
+fn excel_rejects_missing_required_values() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("invalid.xlsx");
     for (column, value, message) in [
         (1, "", "写法、假名、释义"),
         (2, "", "写法、假名、释义"),
         (3, "", "写法、假名、释义"),
-        (5, "abc", "音调必须为斜杠分隔的非负整数"),
-        (5, "1/", "音调必须为斜杠分隔的非负整数"),
-        (5, "3", "音调"),
-        (3, "1. 狗\n3. 犬", "释义编号"),
-        (7, "1. 犬です\n3. 犬がいます", "日文例句编号"),
-        (8, "1. 狗。\n3. 犬。", "例句中文翻译编号"),
     ] {
         let mut book = rust_xlsxwriter::Workbook::new();
         let sheet = book.add_worksheet();
@@ -439,31 +425,6 @@ fn excel_rejects_missing_required_values_and_invalid_pitch() {
 }
 
 #[test]
-fn excel_rejects_numbered_meaning_conflict() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("complex.xlsx");
-    let word = super::format::ExchangeWord {
-        external_id: Some("id".into()),
-        kanji: "猫".into(),
-        kana: "ねこ".into(),
-        senses: vec![super::format::ExchangeSense {
-            meaning: "1. 与编号冲突".into(),
-        }],
-        parts_of_speech: vec![],
-        pitch_accents: vec![],
-        jlpt: None,
-        examples: vec![],
-        note: String::new(),
-    };
-    assert!(
-        super::excel::write(&path, Some("test"), &[word], &jobs::Control::default())
-            .unwrap_err()
-            .message
-            .contains("编号行格式冲突")
-    );
-}
-
-#[test]
 fn excel_namespace_metadata_reads_only_escaped_string_constants() {
     let root = tempfile::tempdir().unwrap();
     let source = file(root.path());
@@ -505,118 +466,54 @@ fn excel_namespace_metadata_reads_only_escaped_string_constants() {
 }
 
 #[test]
-fn excel_multiple_senses_pitches_and_examples_roundtrip() {
-    use super::format::{ExchangeExample, ExchangePitch, ExchangeSense, ExchangeWord};
+fn excel_free_text_roundtrip_preserves_numbering_and_independent_translations() {
     let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("multiple.xlsx");
-    let word = ExchangeWord {
-        external_id: Some("multi".into()),
-        kanji: "犬".into(),
-        kana: "いぬ".into(),
-        senses: vec![
-            ExchangeSense {
-                meaning: "狗".into(),
-            },
-            ExchangeSense {
-                meaning: "犬类".into(),
-            },
-        ],
-        parts_of_speech: vec!["noun".into()],
-        pitch_accents: vec![ExchangePitch { downstep: 0 }, ExchangePitch { downstep: 1 }],
-        jlpt: None,
-        examples: vec![
-            ExchangeExample {
-                jp: "犬がいる。".into(),
-                cn: Some("有狗。".into()),
-                sense_index: Some(0),
-            },
-            ExchangeExample {
-                jp: "犬を見た。".into(),
-                cn: None,
-                sense_index: Some(1),
-            },
-            ExchangeExample {
-                jp: "犬が走る。".into(),
-                cn: Some("狗在跑。".into()),
-                sense_index: None,
-            },
-        ],
-        note: "备注".into(),
-    };
+    let document: super::format::Document =
+        serde_json::from_slice(&std::fs::read(file(root.path())).unwrap()).unwrap();
+    let mut word = document.words[0].clone();
+    word.meaning = "1. 狗
+
+第三种含义，不要求编号"
+        .into();
+    word.pitch = "平板型 / 2".into();
+    word.examples_jp = "[无关联] 犬がいる。
+犬を見た。
+
+犬が走る。"
+        .into();
+    word.examples_cn = "只有一行翻译".into();
+    let path = root.path().join("free.xlsx");
     super::excel::write(
         &path,
-        Some("multi"),
-        std::slice::from_ref(&word),
+        Some("free"),
+        &[word.clone()],
         &jobs::Control::default(),
     )
     .unwrap();
-    let bytes = std::fs::read(&path).unwrap();
-    let inspection =
-        super::excel::inspect(&bytes, &Default::default(), &jobs::Control::default()).unwrap();
-    assert_eq!(inspection["samples"][0][3], "1. 狗\n2. 犬类");
-    assert_eq!(inspection["samples"][0][5], "0/1");
-    assert_eq!(
-        inspection["samples"][0][7],
-        "1. 犬がいる。\n2. [义项2] 犬を見た。\n3. [无关联] 犬が走る。"
-    );
-    assert_eq!(inspection["samples"][0][8], "1. 有狗。\n2.\n3. 狗在跑。");
     let (_, parsed, _) = super::excel::parse(
-        &bytes,
+        &std::fs::read(&path).unwrap(),
         &Default::default(),
-        "multi",
+        "free",
         &jobs::Control::default(),
     )
     .unwrap();
     assert_eq!(parsed[0].1.as_ref().unwrap(), &word);
-    let mut untranslated = word.clone();
-    untranslated
-        .examples
-        .iter_mut()
-        .for_each(|example| example.cn = None);
-    let blank_path = root.path().join("untranslated.xlsx");
+    word.examples_jp.clear();
     super::excel::write(
-        &blank_path,
-        Some("multi"),
-        &[untranslated.clone()],
+        &path,
+        Some("free"),
+        &[word.clone()],
         &jobs::Control::default(),
     )
     .unwrap();
-    let (_, blank, _) = super::excel::parse(
-        &std::fs::read(&blank_path).unwrap(),
+    let (_, parsed, _) = super::excel::parse(
+        &std::fs::read(&path).unwrap(),
         &Default::default(),
-        "multi",
+        "free",
         &jobs::Control::default(),
     )
     .unwrap();
-    assert_eq!(blank[0].1.as_ref().unwrap(), &untranslated);
-    let mut conn = database(root.path());
-    let task = preview_file(root.path(), &conn, &path);
-    assert_eq!((task.valid, task.errors), (1, 0));
-    assert_eq!(
-        commit(
-            &mut conn,
-            root.path(),
-            &task.task_id,
-            options(),
-            &jobs::Control::default()
-        )
-        .unwrap()
-        .created,
-        1
-    );
-    let id: String = conn
-        .query_row("SELECT id FROM words", [], |row| row.get(0))
-        .unwrap();
-    let content = super::import::portable(&crate::storage::words::get(&conn, &id).unwrap().content);
-    assert_eq!(content.senses, word.senses);
-    let mut actual_pitches = content
-        .pitch_accents
-        .iter()
-        .map(|pitch| pitch.downstep)
-        .collect::<Vec<_>>();
-    actual_pitches.sort_unstable();
-    assert_eq!(actual_pitches, vec![0, 1]);
-    assert_eq!(content.examples, word.examples);
+    assert_eq!(parsed[0].1.as_ref().unwrap(), &word);
 }
 
 #[test]
@@ -711,8 +608,8 @@ fn backup_snapshot_and_json_export_round_trip_real_files() {
     .unwrap();
     let bytes = std::fs::read(output).unwrap();
     let document: super::format::Document = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(document.words[0].examples[0].sense_index, Some(0));
-    assert_eq!(document.version, 2);
+    assert_eq!(document.words[0].examples_jp, "猫だ");
+    assert_eq!(document.version, 1);
     assert!(!String::from_utf8(bytes).unwrap().contains("suspended"));
     assert!(document.exported_at.ends_with('Z'));
     let imported = preview_file(root.path(), &conn, &root.path().join("export.json"));
@@ -730,18 +627,14 @@ fn options() -> CommitOptions {
 
 fn database(root: &Path) -> Connection {
     std::fs::create_dir_all(root.join("data")).unwrap();
-    let conn = crate::storage::migrations::open_database(
-        &root.join("data/main.sqlite3"),
-        &root.join("backups"),
-    )
-    .unwrap();
+    let conn = crate::storage::migrations::open_database(&root.join("data/main.sqlite3")).unwrap();
     conn.execute("INSERT INTO libraries(id,name,created_at,updated_at) VALUES('00000000-0000-0000-0000-000000000001','测试',1,1)", []).unwrap();
     conn
 }
 
 fn file(root: &Path) -> std::path::PathBuf {
     let file = root.join("source.json");
-    std::fs::write(&file,serde_json::to_vec(&serde_json::json!({"format":"nyako-wordbook","version":2,"source_namespace":"test-source","exported_at":"2026-11-01T00:00:00Z","words":[{"external_id":"cat","kanji":"猫","kana":"ねこ","senses":[{"meaning":"猫"}],"examples":[{"jp":"猫だ","sense_index":0}]}]})).unwrap()).unwrap();
+    std::fs::write(&file,serde_json::to_vec(&serde_json::json!({"format":"nyako-wordbook","version":1,"source_namespace":"test-source","exported_at":"2026-11-01T00:00:00Z","words":[{"external_id":"cat","kanji":"猫","kana":"ねこ","meaning":"猫","examples_jp":"猫だ"}]})).unwrap()).unwrap();
     file
 }
 
@@ -769,11 +662,10 @@ fn verb_transitivity_survives_excel_and_json_roundtrips() {
         kana: "あく".into(),
         parts_of_speech: vec!["godan_verb".into(), "intransitive".into()],
         jlpt: Some("N4".into()),
-        pitch_accents: vec![],
-        senses: vec![super::format::ExchangeSense {
-            meaning: "开".into(),
-        }],
-        examples: vec![],
+        pitch: String::new(),
+        meaning: "开".into(),
+        examples_jp: String::new(),
+        examples_cn: String::new(),
         note: String::new(),
     };
     let source = root.path().join("verbs.xlsx");
@@ -1138,7 +1030,7 @@ fn excel_export_retains_namespace_when_spelling_and_reading_change() {
 }
 
 #[test]
-fn repeated_import_preserves_cards_and_child_identity() {
+fn repeated_import_preserves_cards_and_word_identity() {
     let root = tempfile::tempdir().unwrap();
     let mut conn = database(root.path());
     let source = file(root.path());
@@ -1160,8 +1052,8 @@ fn repeated_import_preserves_cards_and_child_identity() {
     let card: String = conn
         .query_row("SELECT id FROM cards", [], |r| r.get(0))
         .unwrap();
-    let sense: String = conn
-        .query_row("SELECT id FROM senses", [], |r| r.get(0))
+    let word: String = conn
+        .query_row("SELECT id FROM words", [], |r| r.get(0))
         .unwrap();
     let second = preview_file(root.path(), &conn, &source);
     let rows = super::import::page(&conn, root.path(), &second.task_id, 0, false).unwrap();
@@ -1185,9 +1077,9 @@ fn repeated_import_preserves_cards_and_child_identity() {
         1
     );
     assert_eq!(
-        conn.query_row("SELECT id FROM senses", [], |r| r.get::<_, String>(0))
+        conn.query_row("SELECT id FROM words", [], |r| r.get::<_, String>(0))
             .unwrap(),
-        sense
+        word
     );
     assert_eq!(
         conn.query_row("SELECT id,suspended,due_at FROM cards", [], |r| Ok((
@@ -1254,7 +1146,7 @@ fn backup_rejects_forged_manifest_and_unsafe_paths() {
 }
 
 #[test]
-fn partial_update_keeps_child_ids_and_bom_duplicates_are_all_rejected() {
+fn partial_update_keeps_other_text_and_bom_duplicates_are_all_rejected() {
     let root = tempfile::tempdir().unwrap();
     let mut conn = database(root.path());
     let source = file(root.path());
@@ -1300,8 +1192,8 @@ fn partial_update_keeps_child_ids_and_bom_duplicates_are_all_rejected() {
         1
     );
     let after = crate::storage::words::get(&conn, &word).unwrap().content;
-    assert_eq!(before.senses, after.senses);
-    assert_eq!(before.examples, after.examples);
+    assert_eq!(before.meaning, after.meaning);
+    assert_eq!(before.examples_jp, after.examples_jp);
     assert_eq!(after.note, "只更新备注");
     let duplicate = document["words"][0].clone();
     document["words"].as_array_mut().unwrap().push(duplicate);
@@ -1328,7 +1220,7 @@ fn import_summary_covers_all_pages_and_preserves_field_presence() {
     let mut document: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&source).unwrap()).unwrap();
     let same = document["words"][0].clone();
-    let mut rows = (0..51).map(|index| serde_json::json!({"external_id":format!("new-{index}"),"kanji":format!("新{index}"),"kana":format!("しん{index}"),"senses":[{"meaning":"新词"}]})).collect::<Vec<_>>();
+    let mut rows = (0..51).map(|index| serde_json::json!({"external_id":format!("new-{index}"),"kanji":format!("新{index}"),"kana":format!("しん{index}"),"meaning":"新词"})).collect::<Vec<_>>();
     rows.push(same.clone());
     let mut update = same.clone();
     update["external_id"] = "cat-update".into();
@@ -1342,7 +1234,7 @@ fn import_summary_covers_all_pages_and_preserves_field_presence() {
     ambiguous["external_id"] = "unlinked-different".into();
     ambiguous["note"] = "不同的内容".into();
     rows.push(ambiguous);
-    rows.push(serde_json::json!({"external_id":"invalid","kanji":"错","kana":"あ","senses":[]}));
+    rows.push(serde_json::json!({"external_id":"invalid","kanji":"错","kana":"あ","meaning":""}));
     document["words"] = rows.into();
     std::fs::write(&source, serde_json::to_vec(&document).unwrap()).unwrap();
     let task = preview_file(root.path(), &conn, &source);

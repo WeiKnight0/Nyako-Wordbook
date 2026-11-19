@@ -2,11 +2,11 @@
 
 > 当前正式存储为 `data/main.sqlite3`，不使用版本子目录；旧版数据已按要求删除，原 `v3/` 新版数据移回根目录，不提供软件内迁入。实际词条表由 `src-tauri/src/storage/migrations/003_wordbook.sql` 建立：写法、假名、释义必填，音调仅存数字，不包含标签、媒体、音调来源和备注格式。以下旧模型字段及升级设想不代表当前正式库。
 
-当前本地一致性策略：串行数据库服务、事务、外键和单条 revision 检查保留；词条聚合在保存入口校验，通用事务不再扫描全库义项。普通启动执行 `quick_check`，迁移、备份和恢复仍完整校验。导入目标使用连接随机身份、`total_changes` 和 `data_version` 检测变化，不再反复遍历业务表计算哈希；标记仅在原连接有效，重启后必须显式恢复任务并重新预览。写入回滚也可能使标记失效，保守要求重新预览。
+当前本地一致性策略：串行数据库服务、事务、外键和单条 revision 检查保留；词条聚合在保存入口校验，通用事务不扫描全库内容。普通启动执行 `quick_check`，备份和恢复仍完整校验。导入目标使用连接随机身份、`total_changes` 和 `data_version` 检测变化，不再反复遍历业务表计算哈希；标记仅在原连接有效，重启后必须显式恢复任务并重新预览。写入回滚也可能使标记失效，保守要求重新预览。
 
 ## 1. 技术决策与模块边界
 
-采用 Tauri 2 + Rust + Vue 3/TypeScript + SQLite。M0 已建立工程和独立验证模块，依赖由锁文件固定；Windows 上已验证 WebView、FTS5 和 FSRS 基础兼容性，三平台构建与全部验收尚未完成。M1-A 已建立 `storage/` 正式数据库模块、两版迁移、迁移前快照和串行事务服务；业务编辑、调度和完整备份恢复仍为后续阶段规格，不能将 schema 存在视为这些功能已经实现。
+采用 Tauri 2 + Rust + Vue 3/TypeScript + SQLite。M0 已建立工程和独立验证模块，依赖由锁文件固定；Windows 上已验证 WebView、FTS5 和 FSRS 基础兼容性，三平台构建与全部验收尚未完成。当前 `storage/` 使用文本模型单一建库基线和串行事务服务；业务编辑、调度和完整备份恢复仍为后续阶段规格，不能将 schema 存在视为这些功能已经实现。
 
 ```mermaid
 flowchart LR
@@ -61,11 +61,8 @@ flowchart LR
 | 表 | 核心字段 | 关系与规则 |
 | --- | --- | --- |
 | `libraries` | `id, name, description, archived, revision, created_at, updated_at` | 名称非唯一；删除仅级联成员关系 |
-| `words` | `id, kanji?, kana, jlpt?, note, note_format, search_text, revision, created_at, updated_at` | kana 必填；jlpt 为 N1—N5 或空；note_format 为 plain/markdown |
-| `senses` | `id, word_id, position, meaning` | meaning 必填；同词下 position 唯一；至少一个有效义项由事务校验 |
+| `words` | `id, kanji, kana, meaning, pitch, examples_jp, examples_cn, jlpt?, note, search_text, revision, created_at, updated_at` | 写法、假名、释义必填；四个内容字段直接保存文本，无子记录关联 |
 | `word_pos` | `word_id, pos_code` | 联合唯一；词性字典稳定编码，未知输入需映射或保存原始备注 |
-| `examples` | `id, word_id, sense_id?, position, jp, cn?, accepted_answers_json?` | sense_id 若非空须属于同一 word；填空答案 M4 使用 |
-| `pitch_accents` | `id, word_id, mora_count, downstep, source?` | `0 <= downstep <= mora_count`；mora_count 为正整数；无记录即未知 |
 | `library_words` | `library_id, word_id, added_at` | 联合主键，一词可属多个词库 |
 | `tags` / `word_tags` | `id, name` / `word_id, tag_id` | 标签名归一化后唯一；关联联合唯一 |
 | `media` | `id, sha256, relative_path, mime, size, status` | SHA-256 唯一；路径由程序生成；status 为 staged/ready |
@@ -83,11 +80,11 @@ flowchart LR
 
 为支撑 04 的队列与配额，正式迁移还需包括以下字段：`cards.introduced_at?` 记录当前学习周期首次评分时间，`cards.eligible_since` 记录首次进入有效学习范围的时间；`review_events.is_new_introduction` 标记该评分是否引入新词；`sessions.timezone`、`sessions.day_start_hour` 固定会话日规则。每日新词额度按未撤销的引入事件、学习日和 word_id 去重计算；重置不删除当日历史额度。卡片创建时绑定当时默认参数集，尚未评分时 stability/difficulty 可空。
 
-M4 为例句补充 `cloze_start`、`cloze_end` 和 `answer_match_options_json`：范围使用原文 NFC 归一化后的 Unicode 标量索引、左闭右开，不使用 UTF-8 字节或 JavaScript UTF-16 下标；编辑例句原文时必须重新校验挖空范围。JSON/Protobuf 交换协议同阶段显式升级以携带这些字段，不修改已冻结的 V1 含义。
+当前模型不保存例句级身份、关联义项或挖空范围。学习练习的后续设计需以独立文本字段为基础另行确定。
 
-当前词性编码为 `noun`、`godan_verb`、`ichidan_verb`、`suru_verb`、`kuru_verb`、`i_adjective`、`na_adjective`、`adverb`、`particle`、`expression`、`other`，另有 `intransitive`（自动词）与 `transitive`（他动词）两个动词附加属性。一个词可保留多个适用词性；自／他属性最多一个，且须伴随至少一个动词活用类别；不确定时不录入属性。通过追加迁移扩展 `word_pos` 约束，旧库旧词条保持原状。
+当前词性编码为 `noun`、`godan_verb`、`ichidan_verb`、`irregular_verb`、`i_adjective`、`na_adjective`、`adverb`、`particle`、`expression`、`other`，另有 `intransitive`（自动词）与 `transitive`（他动词）两个动词附加属性。一个词可保留多个适用词性；自／他属性最多一个，且须伴随至少一个动词活用类别；不确定时不录入属性。当前开发模型不兼容旧编码或旧库。
 
-音调按拍而非字符计数；拗音与促音/长音需按日语规则处理。自动计算仅作提示，无法确认时允许用户手动修正或不录入音调。
+音调为最多 1,000 字符的自由文本；释义、日文例句和中文翻译为独立多行文本，各最多 100,000 字符，不解析编号、不匹配条目。
 
 ## 5. 索引与检索
 
@@ -125,7 +122,7 @@ M4 为例句补充 `cloze_start`、`cloze_end` 和 `answer_match_options_json`�
 
 ## 8. 迁移、备份与恢复
 
-启动发现更高 schema 版本时阻止写入并提示升级。迁移前通过 SQLite 在线备份 API 生成一致数据库副本，确认成功后再迁移；失败保留备份并停止打开业务界面。禁止自动降级数据库。
+当前开发版本使用单一文本模型建库基线（Schema 1、新 application_id），不提供旧库迁移、旧模型读取或迁移前备份。新建库经暂存文件初始化成功后落盘；已存在库只读检查格式、建库校验和与 quick_check，不符合则停止启动，不覆盖。开发旧库由用户授权后一次性清理，程序不自动删除。
 
 完整备份建议使用独立 `.nyakobak` ZIP 容器，包含 `manifest.json`、一致性数据库快照及清单引用的媒体。清单记录备份格式版本、schema 版本、应用版本、创建时间、各文件长度与 SHA-256；不包含机器绝对路径。仅支持方法受控的 ZIP 条目，解包限制沿用 03 的路径与体积规则。
 

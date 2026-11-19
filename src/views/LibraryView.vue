@@ -182,9 +182,11 @@ async function deleteSelection(selection: { id: string; revision: number }[]) {
   });
 }
 function deleteWords() { void deleteSelection([...selected.value]); }
-function deleteCurrentWord() {
-  if (!detail.value || busy.value || modal.value) return;
-  void deleteSelection([{ id: detail.value.content.id, revision: detail.value.revision }]);
+async function deletedWord() {
+  selected.value = [];
+  await closeEditor();
+  if (exitRequested.value) return;
+  await action(async () => { await refresh(true); notice.value = '已删除 1 个词条。'; });
 }
 async function confirm() {
   const current = confirmation.value!;
@@ -283,11 +285,11 @@ defineExpose({ modal });
           <WordList ref="wordList" :words="words" :active-id="activeId" :selected="selected" :loading="loading" :readonly="demo" :compact="readerVisible" :reveal-active="navigating" @position="listPage = Math.floor($event / 100)" @select="chooseWord" @toggle="toggle" @range="range" @open="openWord" />
           <footer><span>{{ loading ? '正在更新…' : `已加载 ${words.length} / ${total} 条` }}</span><nav class="list-pagination" aria-label="词条列表分页"><button :disabled="loading || navigating || listPage === 0" @click="changePage(-1)">上一页</button><span aria-live="polite">第 {{ listPage + 1 }} / {{ pageCount }} 页</span><button :disabled="loading || navigating || listPage + 1 >= pageCount" @click="changePage(1)">下一页</button></nav></footer>
         </div>
-        <WordDetailView v-if="readerVisible" :word="detailLoading ? undefined : detail" :libraries="libraries" :readonly="demo" :position="activeIndex + 1" :total="total" :has-previous="activeIndex > 0" :has-next="activeIndex < words.length - 1 || Boolean(cursor)" :navigating="navigating || detailLoading || loading" :error="detailError" @navigate="navigateWord" @retry="select(activeId)" @edit="editWord" @delete="deleteCurrentWord" @close="closeDetail" />
+        <WordDetailView v-if="readerVisible" :word="detailLoading ? undefined : detail" :libraries="libraries" :readonly="demo" :position="activeIndex + 1" :total="total" :has-previous="activeIndex > 0" :has-next="activeIndex < words.length - 1 || Boolean(cursor)" :navigating="navigating || detailLoading || loading" :error="detailError" @navigate="navigateWord" @retry="select(activeId)" @edit="editWord" @close="closeDetail" />
       </section>
     </main>
     <Transition name="dialog"><LibraryEditor v-if="libraryDialog" ref="libraryEditor" :library="editingLibrary" @close="closeEditor" @saved="savedLibrary" @continue-editing="exitRequested = false" /></Transition>
-    <Transition name="dialog"><WordEditor v-if="wordDialog" ref="editor" :word="editingWord" :libraries="libraries" :library-id="query.library_id" @close="closeEditor" @saved="savedWord" @continue-editing="exitRequested = false" /></Transition>
+    <Transition name="dialog"><WordEditor v-if="wordDialog" ref="editor" :word="editingWord" :libraries="libraries" :library-id="query.library_id" @close="closeEditor" @saved="savedWord" @deleted="deletedWord" @continue-editing="exitRequested = false" /></Transition>
     <Transition name="dialog"><EditorDialog v-if="confirmation" :title="confirmation.title" :busy="busy" @close="closeConfirmation"><div class="editor-form"><p v-if="error" class="error" role="alert">{{ error }}</p><p>{{ confirmation.message }}</p><p v-if="confirmation.stage === 2" class="error">第二次确认：此操作将永久删除上述数据。</p><button class="danger-button" :disabled="busy" @click="confirm">{{ confirmation.second && confirmation.stage === 1 ? '我已了解，继续确认' : '确认执行' }}</button><button :disabled="busy" @click="confirmation = undefined">取消</button></div></EditorDialog></Transition>
   </div>
 </template>

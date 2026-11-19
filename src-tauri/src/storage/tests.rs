@@ -1,32 +1,24 @@
 use super::*;
-use migrations::{open_database, open_with_scripts, MIGRATIONS};
+use migrations::{open_database, MIGRATIONS};
 
 fn word(conn: &Connection, id: &str) {
     conn.execute(
-        "INSERT INTO words(id,kanji,kana,created_at,updated_at) VALUES(?1,'働く','はたらく',1,1)",
+        "INSERT INTO words(id,kanji,kana,meaning,created_at,updated_at) VALUES(?1,'働く','はたらく','工作',1,1)",
         [id],
     )
     .unwrap();
-    conn.execute("INSERT INTO senses VALUES(?1,?1,0,'工作')", [id])
-        .unwrap();
 }
 
 #[test]
 fn schema_constraints_and_aggregate_rollback() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("main.sqlite3");
-    let mut conn = open_database(&path, &dir.path().join("backups")).unwrap();
+    let mut conn = open_database(&path).unwrap();
     word(&conn, "a");
     word(&conn, "b");
     assert!(conn
-        .execute("INSERT INTO examples VALUES('x','a','b',0,'働く',NULL)", [])
-        .is_err());
-    assert!(conn
-        .execute("INSERT INTO pitch_accents VALUES('p','a',-1,0)", [])
-        .is_err());
-    assert!(conn
         .execute(
-            "INSERT INTO words(id,kanji,kana,created_at,updated_at) VALUES('empty','','ねこ',1,1)",
+            "INSERT INTO words(id,kanji,kana,meaning,created_at,updated_at) VALUES('empty','','ねこ','猫',1,1)",
             []
         )
         .is_err());
@@ -53,133 +45,8 @@ fn schema_constraints_and_aggregate_rollback() {
         2
     );
     drop(conn);
-    assert!(open_database(&path, &dir.path().join("backups")).is_ok());
+    assert!(open_database(&path).is_ok());
     assert!(!dir.path().join("backups").exists());
-}
-
-#[test]
-fn upgrade_snapshot_includes_wal_and_failed_upgrade_rolls_back() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("main.sqlite3");
-    let backups = dir.path().join("backups");
-    let old = open_with_scripts(&path, &backups, &MIGRATIONS[..1]).unwrap();
-    word(&old, "wal-word");
-    let conn = open_database(&path, &backups).unwrap();
-    let backup = std::fs::read_dir(&backups)
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let snapshot = Connection::open(backup).unwrap();
-    assert_eq!(
-        snapshot
-            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-            .unwrap(),
-        1
-    );
-    assert_eq!(
-        snapshot
-            .query_row("SELECT count(*) FROM words", [], |r| r.get::<_, i64>(0))
-            .unwrap(),
-        1
-    );
-    drop(snapshot);
-    drop(conn);
-    drop(old);
-    let scripts = [
-        MIGRATIONS[0],
-        MIGRATIONS[1],
-        MIGRATIONS[2],
-        "CREATE TABLE must_rollback(id); INVALID SQL;",
-    ];
-    assert_eq!(
-        open_with_scripts(&path, &backups, &scripts)
-            .unwrap_err()
-            .code,
-        "MIGRATION_FAILED"
-    );
-    let conn = Connection::open(&path).unwrap();
-    assert_eq!(
-        conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-            .unwrap(),
-        MIGRATIONS.len() as i64
-    );
-    assert_eq!(
-        conn.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE name='must_rollback'",
-            [],
-            |r| r.get::<_, i64>(0)
-        )
-        .unwrap(),
-        0
-    );
-}
-
-#[test]
-fn transitivity_upgrade_preserves_words_cards_and_previous_snapshot() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("main.sqlite3");
-    let backups = dir.path().join("backups");
-    let old = open_with_scripts(&path, &backups, &MIGRATIONS[..2]).unwrap();
-    word(&old, "legacy");
-    old.execute("INSERT INTO word_pos VALUES('legacy','godan_verb')", [])
-        .unwrap();
-    old.execute("INSERT INTO cards(id,word_id,card_type,state,scheduler_version,parameter_set_id,eligible_since) VALUES('card','legacy','recognition','new','6.6.2','fsrs6-default',1)", []).unwrap();
-    drop(old);
-    let conn = open_database(&path, &backups).unwrap();
-    assert_eq!(
-        conn.query_row(
-            "SELECT pos_code FROM word_pos WHERE word_id='legacy'",
-            [],
-            |row| row.get::<_, String>(0)
-        )
-        .unwrap(),
-        "godan_verb"
-    );
-    assert_eq!(
-        conn.query_row("SELECT id FROM cards WHERE word_id='legacy'", [], |row| row
-            .get::<_, String>(0))
-            .unwrap(),
-        "card"
-    );
-    conn.execute("INSERT INTO word_pos VALUES('legacy','intransitive')", [])
-        .unwrap();
-    let backup = std::fs::read_dir(backups)
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let snapshot = Connection::open(backup).unwrap();
-    assert_eq!(
-        snapshot
-            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-            .unwrap(),
-        2
-    );
-    assert_eq!(
-        snapshot
-            .query_row("SELECT id FROM cards", [], |row| row.get::<_, String>(0))
-            .unwrap(),
-        "card"
-    );
-}
-
-#[test]
-fn backup_failure_prevents_upgrade() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("main.sqlite3");
-    drop(open_with_scripts(&path, &dir.path().join("backups"), &MIGRATIONS[..1]).unwrap());
-    let bad = dir.path().join("not-a-directory");
-    std::fs::write(&bad, b"occupied").unwrap();
-    assert!(open_database(&path, &bad).is_err());
-    let conn = Connection::open(&path).unwrap();
-    assert_eq!(
-        conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-            .unwrap(),
-        1
-    );
 }
 
 #[test]
@@ -188,12 +55,7 @@ fn rejected_files_are_preserved() {
     let path = dir.path().join("main.sqlite3");
     std::fs::write(&path, b"not a sqlite database").unwrap();
     let before = std::fs::read(&path).unwrap();
-    assert_eq!(
-        open_database(&path, &dir.path().join("backups"))
-            .unwrap_err()
-            .code,
-        "DB_CORRUPT"
-    );
+    assert_eq!(open_database(&path).unwrap_err().code, "DB_CORRUPT");
     assert_eq!(before, std::fs::read(&path).unwrap());
     std::fs::remove_file(&path).unwrap();
     for statement in [
@@ -202,11 +64,11 @@ fn rejected_files_are_preserved() {
         "DELETE FROM schema_migrations WHERE version=1",
         "PRAGMA application_id=0",
     ] {
-        let conn = open_database(&path, &dir.path().join("backups")).unwrap();
+        let conn = open_database(&path).unwrap();
         conn.execute_batch(statement).unwrap();
         drop(conn);
         let before = std::fs::read(&path).unwrap();
-        assert!(open_database(&path, &dir.path().join("backups")).is_err());
+        assert!(open_database(&path).is_err());
         assert_eq!(before, std::fs::read(&path).unwrap());
         std::fs::remove_file(&path).unwrap();
     }
@@ -286,13 +148,4 @@ fn database_uses_data_directory_without_version_subdirectory() {
     assert_eq!(state.status().state, "ready");
     assert!(dir.path().join("data/main.sqlite3").exists());
     assert!(!dir.path().join("v3").exists());
-}
-
-#[test]
-fn new_database_failed_migration_can_retry() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("main.sqlite3");
-    assert!(open_with_scripts(&path, &dir.path().join("backups"), &["INVALID SQL"]).is_err());
-    assert!(!path.exists());
-    assert!(open_database(&path, &dir.path().join("backups")).is_ok());
 }

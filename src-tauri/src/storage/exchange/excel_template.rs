@@ -21,15 +21,10 @@ pub(super) fn save(
             kana: "ねこ".into(),
             parts_of_speech: vec!["noun".into()],
             jlpt: Some("N5".into()),
-            pitch_accents: vec![ExchangePitch { downstep: 1 }],
-            senses: vec![ExchangeSense {
-                meaning: "猫".into(),
-            }],
-            examples: vec![ExchangeExample {
-                jp: "猫がいます。".into(),
-                cn: Some("有一只猫。".into()),
-                sense_index: Some(0),
-            }],
+            pitch: "1".into(),
+            meaning: "猫".into(),
+            examples_jp: "猫がいます。".into(),
+            examples_cn: "有一只猫。".into(),
             note: "这是示例词条，请按需修改或删除；新增词条使用新的唯一标识。".into(),
         };
         excel::write(&temporary, None, &[word], control)?;

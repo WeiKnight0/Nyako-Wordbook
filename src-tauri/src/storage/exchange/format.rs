@@ -28,35 +28,15 @@ pub(super) struct ExchangeWord {
     pub parts_of_speech: Vec<String>,
     #[serde(default)]
     pub jlpt: Option<String>,
+    pub meaning: String,
     #[serde(default)]
-    pub pitch_accents: Vec<ExchangePitch>,
-    pub senses: Vec<ExchangeSense>,
+    pub pitch: String,
     #[serde(default)]
-    pub examples: Vec<ExchangeExample>,
+    pub examples_jp: String,
+    #[serde(default)]
+    pub examples_cn: String,
     #[serde(default)]
     pub note: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub(super) struct ExchangeSense {
-    pub meaning: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub(super) struct ExchangeExample {
-    pub jp: String,
-    #[serde(default)]
-    pub cn: Option<String>,
-    #[serde(default)]
-    pub sense_index: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub(super) struct ExchangePitch {
-    pub downstep: i64,
 }
 
 pub(super) fn id() -> String {
@@ -65,50 +45,16 @@ pub(super) fn id() -> String {
 
 impl ExchangeWord {
     pub(super) fn input(&self) -> Result<WordInput, AppError> {
-        let senses: Vec<_> = self
-            .senses
-            .iter()
-            .map(|s| Sense {
-                id: id(),
-                meaning: s.meaning.clone(),
-            })
-            .collect();
-        let examples = self
-            .examples
-            .iter()
-            .map(|e| {
-                let sense_id =
-                    e.sense_index
-                        .map(|index| {
-                            senses.get(index).map(|s| s.id.clone()).ok_or_else(|| {
-                                AppError::validation("例句 sense_index 超出义项范围")
-                            })
-                        })
-                        .transpose()?;
-                Ok(Example {
-                    id: id(),
-                    sense_id,
-                    jp: e.jp.clone(),
-                    cn: e.cn.clone(),
-                })
-            })
-            .collect::<Result<_, AppError>>()?;
         validation::word(WordInput {
             id: id(),
             kanji: self.kanji.clone(),
             kana: self.kana.clone(),
             jlpt: self.jlpt.clone(),
             note: self.note.clone(),
-            senses,
-            examples,
-            pitches: self
-                .pitch_accents
-                .iter()
-                .map(|p| Pitch {
-                    id: id(),
-                    downstep: p.downstep,
-                })
-                .collect(),
+            meaning: self.meaning.clone(),
+            pitch: self.pitch.clone(),
+            examples_jp: self.examples_jp.clone(),
+            examples_cn: self.examples_cn.clone(),
             pos: self.parts_of_speech.clone(),
             library_ids: vec![],
         })
@@ -124,17 +70,10 @@ impl ExchangeWord {
         self.kanji = input.kanji;
         self.kana = input.kana;
         self.note = input.note;
-        self.senses
-            .iter_mut()
-            .zip(input.senses)
-            .for_each(|(out, value)| out.meaning = value.meaning);
-        self.examples
-            .iter_mut()
-            .zip(input.examples)
-            .for_each(|(out, value)| {
-                out.jp = value.jp;
-                out.cn = value.cn;
-            });
+        self.meaning = input.meaning;
+        self.pitch = input.pitch;
+        self.examples_jp = input.examples_jp;
+        self.examples_cn = input.examples_cn;
         if let Some(external) = &self.external_id {
             validation::text(external, 1, 1000)?;
         }

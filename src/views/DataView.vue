@@ -40,7 +40,7 @@ watch([path, namespace], () => {
 const sample = ref<{ sheets: string[]; sheet: string; columns: string[]; samples: string[][] }>();
 async function inspectExcel() {
   await action(async () => {
-    sample.value = await exchange({ operation: 'inspect_excel', path: path.value, options: { sheet: null, headers: true, columns: {}, pos_mapping: {} } });
+    sample.value = await exchange({ operation: 'inspect_excel', path: path.value, options: { sheet: null, headers: true } });
   });
 }
 const library = ref('');
@@ -96,8 +96,8 @@ const restoreConfirmed = ref(false);
 const restartRequired = ref(false);
 let unlisten: (() => void) | undefined;
 let unlistenClose: (() => void) | undefined;
-const fields = ['kanji', 'kana', 'parts_of_speech', 'jlpt', 'pitch_accents', 'senses', 'examples', 'note'];
-const fieldNames: Record<string, string> = { kanji: '写法', kana: '假名', parts_of_speech: '词性', jlpt: 'JLPT', pitch_accents: '音调', senses: '释义', examples: '例句', note: '备注' };
+const fields = ['kanji', 'kana', 'parts_of_speech', 'jlpt', 'pitch', 'meaning', 'examples_jp', 'examples_cn', 'note'];
+const fieldNames: Record<string, string> = { kanji: '写法', kana: '假名', parts_of_speech: '词性', jlpt: 'JLPT', pitch: '音调', meaning: '释义', examples_jp: '日文例句', examples_cn: '例句中文翻译', note: '备注' };
 const confirmation = ref<{ title: string; message: string; run: () => Promise<void> }>();
 const resultDialog = ref<{ title: string; message: string }>();
 function confirmAction(title: string, message: string, run: () => Promise<void>) { confirmation.value = { title, message, run }; }
@@ -175,7 +175,7 @@ function batchChoices(classification: string, strategy: string) {
 async function parse() {
   await action(async () => {
     resetPreview();
-    await loadPreview(await exchange<Preview>({ operation: 'preview', path: path.value, options: { source_namespace: namespace.value, excel: { sheet: null, headers: true, columns: {}, pos_mapping: {} } } }));
+    await loadPreview(await exchange<Preview>({ operation: 'preview', path: path.value, options: { source_namespace: namespace.value, excel: { sheet: null, headers: true } } }));
   }, true);
 }
 async function commit() {
@@ -268,7 +268,7 @@ onBeforeUnmount(() => { unlisten?.(); unlistenClose?.(); });
       <template v-if="preview">
         <div class="preview-tools"><span>以下批量操作仅作用于当前页</span><button class="secondary-button" @click="batchChoices('same', 'keep')">相同内容复用</button><button class="secondary-button" @click="batchChoices('update', 'keep')">可更新项保留已有</button><button class="secondary-button" @click="batchChoices('update', 'fill')">可更新项仅填空</button><button class="secondary-button" @click="batchChoices('ambiguous', 'skip')">歧义项跳过</button><label><input v-model="errorsOnly" type="checkbox" @change="offset = 0; action(page)" />只看错误</label><button v-if="preview.errors" class="text-button" @click="errorReport">保存错误报告</button></div>
         <div class="preview-rows"><article v-for="row in rows" :id="`import-row-${row.line}`" :key="row.line" class="preview-row" tabindex="-1">
-          <div class="preview-row-heading"><strong>第 {{ row.line }} 行 · {{ classifications[row.classification] }}</strong><span v-if="row.content">{{ row.content.kanji || row.content.kana }} · {{ Array.isArray(row.content.senses) ? (row.content.senses[0] as { meaning: string } | undefined)?.meaning : '' }}</span></div><p v-if="row.locally_modified">已有内容与上次导入不同，请核对本地修改后选择覆盖字段。</p><p v-if="row.error" role="alert">{{ row.error }}</p>
+          <div class="preview-row-heading"><strong>第 {{ row.line }} 行 · {{ classifications[row.classification] }}</strong><span v-if="row.content">{{ row.content.kanji || row.content.kana }} · {{ String(row.content.meaning || '').split(String.fromCharCode(10))[0] }}</span></div><p v-if="row.locally_modified">已有内容与上次导入不同，请核对本地修改后选择覆盖字段。</p><p v-if="row.error" role="alert">{{ row.error }}</p>
           <details v-if="row.content"><summary>{{ choices[row.line]?.target ? '核对字段差异' : '查看词条内容' }}</summary><ImportComparison :incoming="row.content" :existing="row.candidates.find(candidate => candidate.id === choices[row.line]?.target)?.content" :present="row.present" /></details>
           <div v-if="choices[row.line]" class="choice-grid">
             <label>身份<select v-model="choices[row.line]!.action"><option value="unresolved">请选择</option><option value="new" :disabled="Boolean(row.matched)">新建独立词条</option><option value="reuse">复用候选</option><option value="skip">跳过</option></select></label>
@@ -288,7 +288,7 @@ onBeforeUnmount(() => { unlisten?.(); unlistenClose?.(); });
     </fieldset>
     <div class="pending-area"><button class="text-button" :disabled="busy || restartRequired || demo" @click="findPending">检查未完成导入</button><div v-if="pendingImports.length"><p>继续时将重新核对文件和词库，冲突选择不会自动恢复。</p><button v-for="task in pendingImports" :key="task.task_id" :disabled="busy" @click="resumeImport(task.task_id)">{{ task.task_id }} · {{ task.valid }} 条有效 · 重新核对</button></div></div>
     </section></Transition>
-    <Transition name="section"><section v-show="section === 'export'" class="data-section" aria-label="导出词条"><div class="section-heading"><div><h2>导出词条</h2><p>Excel 固定单表十列；多义项和例句逐行编号，多音调用斜杠连接。</p></div></div><fieldset :disabled="busy || restartRequired || demo" class="data-panel"><legend>导出范围</legend><label v-if="props.selected.length"><input v-model="selectionExport" type="checkbox" />仅导出选中的 {{ props.selected.length }} 条词条</label><label v-if="!selectionExport">词库 <select v-model="library"><option value="">请选择词库</option><option v-for="item in libraries" :key="item.id" :value="item.id">{{ item.name }}</option></select></label><div class="export-actions"><button :disabled="!library && !selectionExport" @click="exportFile('xlsx')">导出 Excel</button><button class="secondary-button" :disabled="!library && !selectionExport" @click="exportFile('json')">导出 JSON</button></div></fieldset></section></Transition>
+    <Transition name="section"><section v-show="section === 'export'" class="data-section" aria-label="导出词条"><div class="section-heading"><div><h2>导出词条</h2><p>Excel 固定单表十列；释义和例句保留多行原文，音调为自由文本。</p></div></div><fieldset :disabled="busy || restartRequired || demo" class="data-panel"><legend>导出范围</legend><label v-if="props.selected.length"><input v-model="selectionExport" type="checkbox" />仅导出选中的 {{ props.selected.length }} 条词条</label><label v-if="!selectionExport">词库 <select v-model="library"><option value="">请选择词库</option><option v-for="item in libraries" :key="item.id" :value="item.id">{{ item.name }}</option></select></label><div class="export-actions"><button :disabled="!library && !selectionExport" @click="exportFile('xlsx')">导出 Excel</button><button class="secondary-button" :disabled="!library && !selectionExport" @click="exportFile('json')">导出 JSON</button></div></fieldset></section></Transition>
     <Transition name="section"><section v-show="section === 'backup'" class="data-section" aria-label="备份与恢复"><div class="section-heading"><div><h2>备份与恢复</h2><p>备份完整新版数据库；恢复将覆盖当前新版数据。</p></div></div><fieldset :disabled="busy || restartRequired || demo" class="data-panel"><legend>完整备份</legend><button @click="backup">创建完整备份</button></fieldset><fieldset :disabled="busy || restartRequired || demo" class="data-panel"><legend>恢复数据</legend><button class="secondary-button" @click="inspectBackup">选择备份并完整校验</button><template v-if="restore"><dl class="backup-summary" aria-label="已校验备份信息"><div><dt>备份时间</dt><dd>{{ new Date(restore.manifest.created_at).toLocaleString() }}</dd></div><div><dt>词条数量</dt><dd>{{ restore.manifest.words }}</dd></div><div><dt>学习事件</dt><dd>{{ restore.manifest.events }}</dd></div><div><dt>数据库版本</dt><dd>{{ restore.manifest.schema_version }}</dd></div><div><dt>应用版本</dt><dd>{{ restore.manifest.app_version }}</dd></div></dl><label><input v-model="restoreConfirmed" type="checkbox" />我确认覆盖当前新版数据库中的词库和学习状态</label><button class="danger-button" :disabled="!restoreConfirmed" @click="restoreBackup">安全备份后安排恢复</button></template></fieldset></section></Transition>
     </div>
     </div>

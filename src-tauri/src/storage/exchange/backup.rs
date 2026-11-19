@@ -392,7 +392,7 @@ pub(super) fn validate_controlled(
         return Err(invalid("清单与数据库版本不一致"));
     }
     drop(original);
-    let conn = migrations::open_database(&database, &directory.join("migration-backups"))?;
+    let conn = migrations::open_database(&database)?;
     if conn.query_row("SELECT count(*) FROM words", [], |row| row.get::<_, i64>(0))?
         != manifest.words
         || conn.query_row("SELECT count(*) FROM review_events", [], |row| {

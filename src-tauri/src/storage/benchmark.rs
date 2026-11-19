@@ -14,16 +14,10 @@ fn fixture(conn: &mut Connection, count: u32, distribution: &str) -> Result<(), 
          INSERT INTO libraries(id,name,created_at,updated_at) VALUES
          ('10000000-0000-4000-8000-000000000000','基准主库',1,1),
          ('10000000-0000-4000-8000-000000000001','共享词库',1,1);
-         INSERT INTO words(id,kanji,kana,jlpt,note,search_text,created_at,updated_at)
-         SELECT id,CASE WHEN i%5<>0 THEN '仕事'||i ELSE 'はたらく'||i END,'はたらく'||i,'N'||(i%5+1),
+         INSERT INTO words(id,kanji,kana,jlpt,meaning,examples_jp,examples_cn,note,search_text,created_at,updated_at)
+         SELECT id,CASE WHEN i%5<>0 THEN '仕事'||i ELSE 'はたらく'||i END,'はたらく'||i,'N'||(i%5+1),'工作学习'||i||char(10)||char(10)||'劳动生活'||i,'毎日働く'||char(10)||'生活する','每天工作'||char(10)||'生活',
          CASE WHEN i%1000=0 THEN '罕见备注' ELSE '日常工作' END,
          nyako_normalize(CASE WHEN i%5<>0 THEN '仕事'||i ELSE 'はたらく'||i END||char(10)||'はたらく'||i||char(10)||'工作学习'||i||char(10)||'劳动生活'||i||char(10)||CASE WHEN i%1000=0 THEN '罕见备注' ELSE '日常工作' END),1,i+1 FROM fixture;
-         INSERT INTO senses(id,word_id,position,meaning)
-         SELECT printf('30000000-0000-4000-8000-%012x',2*i),id,0,'工作学习'||i FROM fixture UNION ALL
-         SELECT printf('30000000-0000-4000-8000-%012x',2*i+1),id,1,'劳动生活'||i FROM fixture;
-         INSERT INTO examples(id,word_id,sense_id,position,jp,cn)
-         SELECT printf('40000000-0000-4000-8000-%012x',2*i),id,printf('30000000-0000-4000-8000-%012x',2*i),0,'毎日働く','每天工作' FROM fixture UNION ALL
-         SELECT printf('40000000-0000-4000-8000-%012x',2*i+1),id,printf('30000000-0000-4000-8000-%012x',2*i+1),1,'生活する','生活' FROM fixture;
          INSERT INTO word_pos SELECT id,'noun' FROM fixture;
          INSERT INTO library_words SELECT '10000000-0000-4000-8000-000000000000',id,1 FROM fixture WHERE i%10<>0;
          INSERT INTO library_words SELECT '10000000-0000-4000-8000-000000000001',id,1 FROM fixture
@@ -43,13 +37,7 @@ fn fixture(conn: &mut Connection, count: u32, distribution: &str) -> Result<(), 
 }
 
 fn verify(conn: &Connection, count: u32) -> Result<(), AppError> {
-    for (table, multiplier) in [
-        ("words", 1),
-        ("senses", 2),
-        ("examples", 2),
-        ("cards", 1),
-        ("review_events", 5),
-    ] {
+    for (table, multiplier) in [("words", 1), ("cards", 1), ("review_events", 5)] {
         let actual: u32 =
             conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?;
         if actual != count * multiplier {
@@ -65,14 +53,7 @@ fn verify(conn: &Connection, count: u32) -> Result<(), AppError> {
     {
         return Err(AppError::validation("基准夹具完整性检查失败"));
     }
-    for table in [
-        "words",
-        "senses",
-        "examples",
-        "cards",
-        "sessions",
-        "review_events",
-    ] {
+    for table in ["words", "cards", "sessions", "review_events"] {
         let valid = conn
             .prepare(&format!("SELECT id FROM {table}"))?
             .query_map([], |row| row.get::<_, String>(0))?
@@ -129,25 +110,25 @@ pub fn run_mode(
         ));
     }
     std::fs::create_dir_all(root.join("data"))?;
-    let mut conn =
-        migrations::open_database(&root.join("data/main.sqlite3"), &root.join("backups"))?;
+    let mut conn = migrations::open_database(&root.join("data/main.sqlite3"))?;
     let existing: u32 = conn.query_row("SELECT count(*) FROM words", [], |r| r.get(0))?;
     let started = Instant::now();
     if existing == 0 {
         fixture(&mut conn, count, distribution)?;
         std::fs::write(
             root.join(".nyako-fixture"),
-            format!("v3:{count}:{distribution}"),
+            format!("text-v1:{count}:{distribution}"),
         )?;
     }
-    if std::fs::read_to_string(root.join(".nyako-fixture"))? != format!("v3:{count}:{distribution}")
+    if std::fs::read_to_string(root.join(".nyako-fixture"))?
+        != format!("text-v1:{count}:{distribution}")
     {
         return Err(AppError::validation("目录包含不同分布的夹具"));
     }
     verify(&conn, count)?;
     println!(
         "{}",
-        json!({"fixture_version":3,"membership_distribution":distribution,"fixture_words":count,"senses":u64::from(count)*2,"examples":u64::from(count)*2,"events":u64::from(count)*5,"libraries":2,"memberships":conn.query_row("SELECT count(*) FROM library_words", [], |row| row.get::<_, i64>(0))?,"shared_words":conn.query_row("SELECT count(*) FROM (SELECT word_id FROM library_words GROUP BY word_id HAVING count(*)>1)", [], |row| row.get::<_, i64>(0))?,"database_bytes":std::fs::metadata(root.join("data/main.sqlite3"))?.len(),"prepare_seconds":started.elapsed().as_secs_f64(),"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"sqlite":rusqlite::version(),"durability":"WAL/FULL","samples":100,"cache":"OS file cache uncontrolled"})
+        json!({"fixture_version":"text-v1","membership_distribution":distribution,"fixture_words":count,"events":u64::from(count)*5,"libraries":2,"memberships":conn.query_row("SELECT count(*) FROM library_words", [], |row| row.get::<_, i64>(0))?,"shared_words":conn.query_row("SELECT count(*) FROM (SELECT word_id FROM library_words GROUP BY word_id HAVING count(*)>1)", [], |row| row.get::<_, i64>(0))?,"database_bytes":std::fs::metadata(root.join("data/main.sqlite3"))?.len(),"prepare_seconds":started.elapsed().as_secs_f64(),"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"sqlite":rusqlite::version(),"durability":"WAL/FULL","samples":100,"cache":"OS file cache uncontrolled"})
     );
     drop(conn);
     if prepare_only {

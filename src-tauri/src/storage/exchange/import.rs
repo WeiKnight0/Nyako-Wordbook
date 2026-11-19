@@ -176,7 +176,7 @@ fn candidates(
             .optional()?,
         None => None,
     };
-    let mut stmt = conn.prepare("SELECT w.id,w.revision,w.kanji,w.kana,(SELECT meaning FROM senses WHERE word_id=w.id ORDER BY position LIMIT 1) FROM words w WHERE w.id=?1 OR (w.kana=?2 AND coalesce(w.kanji,'')=?3) ORDER BY w.id")?;
+    let mut stmt = conn.prepare("SELECT w.id,w.revision,w.kanji,w.kana,w.meaning FROM words w WHERE w.id=?1 OR (w.kana=?2 AND coalesce(w.kanji,'')=?3) ORDER BY w.id")?;
     let mut rows: Vec<Candidate> = stmt
         .query_map(params![matched, word.kana, word.kanji], |r| {
             Ok(Candidate {
@@ -333,32 +333,10 @@ pub(super) fn portable(input: &WordInput) -> ExchangeWord {
         kana: input.kana.clone(),
         parts_of_speech: input.pos.clone(),
         jlpt: input.jlpt.clone(),
-        pitch_accents: input
-            .pitches
-            .iter()
-            .map(|p| ExchangePitch {
-                downstep: p.downstep,
-            })
-            .collect(),
-        senses: input
-            .senses
-            .iter()
-            .map(|s| ExchangeSense {
-                meaning: s.meaning.clone(),
-            })
-            .collect(),
-        examples: input
-            .examples
-            .iter()
-            .map(|e| ExchangeExample {
-                jp: e.jp.clone(),
-                cn: e.cn.clone(),
-                sense_index: e
-                    .sense_id
-                    .as_ref()
-                    .and_then(|id| input.senses.iter().position(|s| &s.id == id)),
-            })
-            .collect(),
+        meaning: input.meaning.clone(),
+        pitch: input.pitch.clone(),
+        examples_jp: input.examples_jp.clone(),
+        examples_cn: input.examples_cn.clone(),
         note: input.note.clone(),
     }
 }
@@ -385,9 +363,10 @@ fn merge(
         "kana",
         "parts_of_speech",
         "jlpt",
-        "pitch_accents",
-        "senses",
-        "examples",
+        "pitch",
+        "meaning",
+        "examples_jp",
+        "examples_cn",
         "note",
     ] {
         if !present.contains(field) {
@@ -422,9 +401,10 @@ pub(super) fn commit(
         "kana",
         "parts_of_speech",
         "jlpt",
-        "pitch_accents",
-        "senses",
-        "examples",
+        "pitch",
+        "meaning",
+        "examples_jp",
+        "examples_cn",
         "note",
     ]
     .into_iter()
@@ -567,33 +547,6 @@ pub(super) fn commit(
         if !unchanged {
             let mut input = merged.input()?;
             input.id = word_id.clone();
-            if let (Some(detail), Some(previous)) = (&existing, &current) {
-                if previous.senses == merged.senses {
-                    input.senses = detail.content.senses.clone();
-                }
-                if previous.examples == merged.examples
-                    && previous.senses != merged.senses
-                    && !previous.examples.is_empty()
-                    && !(choice.strategy == "replace" && choice.fields.contains("examples"))
-                {
-                    return Err(AppError::validation("替换义项时请同时确认例句及其义项关联"));
-                }
-                input
-                    .examples
-                    .iter_mut()
-                    .zip(&merged.examples)
-                    .for_each(|(example, portable)| {
-                        example.sense_id = portable
-                            .sense_index
-                            .map(|index| input.senses[index].id.clone());
-                    });
-                if previous.examples == merged.examples && previous.senses == merged.senses {
-                    input.examples = detail.content.examples.clone();
-                }
-                if previous.pitch_accents == merged.pitch_accents {
-                    input.pitches = detail.content.pitches.clone();
-                }
-            }
             input.library_ids = existing
                 .as_ref()
                 .map(|v| v.content.library_ids.clone())

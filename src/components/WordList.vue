@@ -67,7 +67,7 @@ defineExpose({ scrollToIndex });
         <div v-for="word in visible" :id="`formal-${word.id}`" :key="word.id" class="formal-row" :class="{ selected: activeId === word.id, checked: selected.some(item => item.id === word.id) }" role="option" :aria-selected="selected.some(item => item.id === word.id)" @click="activate(word.id)">
           <input v-if="!readonly" type="checkbox" :aria-label="`选择 ${word.kanji || word.kana}`" :checked="selected.some(item => item.id === word.id)" @click.stop @change="emit('toggle', word)" /><span v-else aria-hidden="true"></span>
           <div><strong lang="ja">{{ word.kanji || word.kana }}</strong><small lang="ja">{{ word.kana }}</small></div>
-          <div class="row-meaning">{{ word.meaning }}<small v-if="word.sense_count > 1">另有 {{ word.sense_count - 1 }} 项</small></div>
+          <div class="row-meaning">{{ word.meaning }}</div>
           <div class="row-meta"><small v-if="word.jlpt">{{ word.jlpt }}</small><small v-if="word.pos.length">{{ posLabels(word.pos) }}</small></div>
         </div>
       </div>

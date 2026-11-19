@@ -123,7 +123,7 @@ fn open(root: &Path) -> Result<Connection, AppError> {
         std::fs::create_dir_all(root.join(folder))?;
     }
     let _timing = crate::timing::Timing::start("storage/open_total");
-    let conn = migrations::open_database(&root.join("data/main.sqlite3"), &root.join("backups"))?;
+    let conn = migrations::open_database(&root.join("data/main.sqlite3"))?;
     query::register(&conn)?;
     Ok(conn)
 }

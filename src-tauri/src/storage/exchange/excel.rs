@@ -3,11 +3,7 @@ use crate::error::AppError;
 use calamine::{Data, Reader, Xlsx};
 use rust_xlsxwriter::{Format, Workbook};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, HashSet},
-    io::Cursor,
-    path::Path,
-};
+use std::{collections::HashSet, io::Cursor, path::Path};
 
 const NAMESPACE_NAME: &str = "_nyako_source_namespace";
 
@@ -24,25 +20,19 @@ pub(super) const LABELS: &[&str] = &[
     "备注",
 ];
 
-/// @description 接收单表 Excel 的兼容参数，拒绝旧列映射以免误读。 @param sheet 可选工作表名；headers 表头标志；columns 旧列映射。 @throws 旧映射或缺表头在预览时拒绝。
+/// @description 配置固定十列的单表 Excel。 @param sheet 可选工作表名；headers 表头标志。 @throws 多表或缺表头在预览时拒绝。
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ExcelOptions {
     pub sheet: Option<String>,
     #[serde(default = "yes")]
     pub headers: bool,
-    #[serde(default)]
-    pub columns: BTreeMap<String, usize>,
-    #[serde(default)]
-    pub pos_mapping: BTreeMap<String, String>,
 }
 impl Default for ExcelOptions {
     fn default() -> Self {
         Self {
             sheet: None,
             headers: true,
-            columns: BTreeMap::new(),
-            pos_mapping: BTreeMap::new(),
         }
     }
 }
@@ -107,9 +97,6 @@ fn table(book: &mut Xlsx<Cursor<&[u8]>>, name: &str) -> Result<Vec<Vec<String>>,
         .collect()
 }
 fn selected(book: &Xlsx<Cursor<&[u8]>>, options: &ExcelOptions) -> Result<String, AppError> {
-    if !options.columns.is_empty() || !options.pos_mapping.is_empty() {
-        return Err(invalid("单表 Excel 不支持列映射或词性映射"));
-    }
     if book.sheet_names().len() != 1 {
         return Err(invalid("Excel 只能包含一个工作表"));
     }
@@ -146,155 +133,6 @@ type Parsed = (
     HashSet<String>,
 );
 
-fn numbered(value: &str, field: &str) -> Result<Vec<String>, AppError> {
-    if !value.contains('\n') {
-        if value.starts_with("1. ") {
-            return Err(invalid(format!("{field}只有一个值时无需编号")));
-        }
-        return Ok(vec![value.into()]);
-    }
-    if !value.starts_with("1. ") {
-        return Err(invalid(format!("{field}多项须从 1. 开始逐行编号")));
-    }
-    value
-        .lines()
-        .enumerate()
-        .map(|(index, line)| {
-            line.strip_prefix(&format!("{}. ", index + 1))
-                .filter(|text| !text.trim().is_empty())
-                .map(str::to_owned)
-                .ok_or_else(|| invalid(format!("{field}编号须从 1 连续排列，且内容不能为空")))
-        })
-        .collect()
-}
-
-fn numbered_text(values: &[String]) -> String {
-    if values.len() == 1 {
-        return values[0].clone();
-    }
-    values
-        .iter()
-        .enumerate()
-        .map(|(index, value)| format!("{}. {value}", index + 1))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn examples(jp: &str, cn: &str, senses: usize) -> Result<Vec<ExchangeExample>, AppError> {
-    if jp.is_empty() {
-        if !cn.is_empty() {
-            return Err(invalid("例句中文翻译需要日文例句"));
-        }
-        return Ok(vec![]);
-    }
-    let japanese = numbered(jp, "日文例句")?;
-    let chinese = if cn.is_empty() {
-        vec![String::new(); japanese.len()]
-    } else if japanese.len() == 1 {
-        vec![cn.into()]
-    } else {
-        cn.lines()
-            .enumerate()
-            .map(|(index, line)| {
-                let prefix = format!("{}.", index + 1);
-                line.strip_prefix(&prefix)
-                    .and_then(|text| {
-                        text.strip_prefix(' ')
-                            .or_else(|| text.is_empty().then_some(text))
-                    })
-                    .map(str::to_owned)
-                    .ok_or_else(|| invalid("例句中文翻译编号必须与日文例句逐条对应"))
-            })
-            .collect::<Result<Vec<_>, _>>()?
-    };
-    if japanese.len() != chinese.len() {
-        return Err(invalid("例句中文翻译编号必须与日文例句逐条对应"));
-    }
-    japanese
-        .into_iter()
-        .zip(chinese)
-        .map(|(jp, cn)| {
-            let (jp, sense_index) = if let Some(text) = jp.strip_prefix("[无关联] ") {
-                (text, None)
-            } else if let Some(indexed) = jp.strip_prefix("[义项") {
-                let (index, text) = indexed
-                    .split_once("] ")
-                    .ok_or_else(|| invalid("日文例句义项标记格式错误"))?;
-                let number = index
-                    .parse::<usize>()
-                    .map_err(|_| invalid("日文例句义项编号错误"))?;
-                if number == 0 || number > senses {
-                    return Err(invalid("日文例句义项编号超出范围"));
-                }
-                (text, Some(number - 1))
-            } else {
-                (jp.as_str(), Some(0))
-            };
-            Ok(ExchangeExample {
-                jp: jp.into(),
-                cn: (!cn.is_empty()).then_some(cn),
-                sense_index,
-            })
-        })
-        .collect()
-}
-
-fn export_text(values: &[String], field: &str) -> Result<String, AppError> {
-    if values.iter().any(|value| value.contains('\n'))
-        || (values.len() == 1 && values[0].starts_with("1. "))
-    {
-        return Err(invalid(format!(
-            "{field}与编号行格式冲突，请修改内容后再导出 Excel"
-        )));
-    }
-    Ok(numbered_text(values))
-}
-
-fn export_examples(examples: &[ExchangeExample]) -> Result<(String, String), AppError> {
-    let japanese = examples
-        .iter()
-        .map(|example| {
-            if example.jp.contains('\n')
-                || example.jp.starts_with("[义项")
-                || example.jp.starts_with("[无关联] ")
-            {
-                return Err(invalid(
-                    "日文例句与编号或义项标记冲突，请修改后再导出 Excel",
-                ));
-            }
-            Ok(match example.sense_index {
-                Some(0) => example.jp.clone(),
-                Some(index) => format!("[义项{}] {}", index + 1, example.jp),
-                None => format!("[无关联] {}", example.jp),
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let chinese = examples
-        .iter()
-        .map(|example| example.cn.as_deref().unwrap_or(""))
-        .collect::<Vec<_>>();
-    let cn = if examples.len() == 1 {
-        chinese[0].into()
-    } else if chinese.iter().all(|text| text.is_empty()) {
-        String::new()
-    } else {
-        chinese
-            .iter()
-            .enumerate()
-            .map(|(index, text)| {
-                format!(
-                    "{}.{}{}",
-                    index + 1,
-                    if text.is_empty() { "" } else { " " },
-                    text
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    Ok((export_text(&japanese, "日文例句")?, cn))
-}
-
 fn source_namespace(book: &Xlsx<Cursor<&[u8]>>, fallback: &str) -> Result<String, AppError> {
     let mut names = book
         .defined_names()
@@ -317,7 +155,7 @@ fn source_namespace(book: &Xlsx<Cursor<&[u8]>>, fallback: &str) -> Result<String
     super::super::validation::text(&literal.replace("\"\"", "\""), 1, 1000)
 }
 
-/// @description 将固定十列的单表 Excel 转为逐行词条；音调拍数由假名推导。 @param bytes 文件内容；options 列设置；namespace 稳定导入来源；control 任务控制。 @throws 缺少必填列、格式错误或非法单元格时报错。
+/// @description 将固定十列的单表 Excel 转为逐行词条，文本单元格直接保存。 @param bytes 文件内容；options 列设置；namespace 稳定导入来源；control 任务控制。 @throws 缺少必填列、格式错误或非法单元格时报错。
 pub(super) fn parse(
     bytes: &[u8],
     options: &ExcelOptions,
@@ -359,46 +197,21 @@ pub(super) fn parse(
             if [1, 2, 3].iter().any(|column| field(*column).is_empty()) {
                 return Err(invalid("写法、假名、释义不得为空"));
             }
-            let senses = numbered(field(3), "释义")?
-                .into_iter()
-                .map(|meaning| ExchangeSense { meaning })
-                .collect::<Vec<_>>();
-            let pitch_accents = if field(5).is_empty() {
-                vec![]
-            } else {
-                field(5)
-                    .split('/')
-                    .map(|value| {
-                        Ok(ExchangePitch {
-                            downstep: value
-                                .trim()
-                                .parse()
-                                .map_err(|_| invalid("音调必须为斜杠分隔的非负整数"))?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, AppError>>()?
-            };
-            let examples = examples(field(7), field(8), senses.len())?;
             let mut word = ExchangeWord {
                 external_id: (!field(0).is_empty()).then(|| field(0).into()),
                 kanji: field(1).into(),
                 kana: field(2).into(),
-                senses,
+                meaning: field(3).into(),
                 parts_of_speech: field(4)
                     .split('|')
                     .filter(|value| !value.is_empty())
-                    .map(|value| {
-                        options
-                            .pos_mapping
-                            .get(value)
-                            .cloned()
-                            .unwrap_or_else(|| value.into())
-                    })
+                    .map(String::from)
                     .collect(),
-                pitch_accents,
+                pitch: field(5).into(),
                 jlpt: (!field(6).is_empty())
                     .then(|| format!("N{}", field(6).trim_start_matches(['N', 'n']))),
-                examples,
+                examples_jp: field(7).into(),
+                examples_cn: field(8).into(),
                 note: field(9).into(),
             };
             word.validate()?;
@@ -423,11 +236,12 @@ pub(super) fn parse(
             "external_id",
             "kanji",
             "kana",
-            "senses",
+            "meaning",
             "parts_of_speech",
-            "pitch_accents",
+            "pitch",
             "jlpt",
-            "examples",
+            "examples_jp",
+            "examples_cn",
             "note",
         ]
         .into_iter()
@@ -436,7 +250,7 @@ pub(super) fn parse(
     ))
 }
 
-/// @description 写出十列单表并复读校验，不截断多义项等无法表达的内容。 @param path 输出路径；namespace 导出来源，模板留空以使用用户填写的来源；words 词条；control 任务状态。 @throws 复杂词条或格式限制不允许单表无损表示时拒绝。
+/// @description 写出十列单表并复读校验，保留文本内容和换行。 @param path 输出路径；namespace 导出来源，模板留空以使用用户填写的来源；words 词条；control 任务状态。 @throws 复杂词条或格式限制不允许单表无损表示时拒绝。
 pub(super) fn write(
     path: &Path,
     namespace: Option<&str>,
@@ -482,28 +296,16 @@ pub(super) fn write(
         if word.kanji.trim().is_empty() {
             return Err(invalid("写法不得为空"));
         }
-        let (jp, cn) = export_examples(&word.examples)?;
         let row = [
             word.external_id.clone().unwrap_or_default(),
             word.kanji.clone(),
             word.kana.clone(),
-            export_text(
-                &word
-                    .senses
-                    .iter()
-                    .map(|s| s.meaning.clone())
-                    .collect::<Vec<_>>(),
-                "释义",
-            )?,
+            word.meaning.clone(),
             word.parts_of_speech.join("|"),
-            word.pitch_accents
-                .iter()
-                .map(|p| p.downstep.to_string())
-                .collect::<Vec<_>>()
-                .join("/"),
+            word.pitch.clone(),
             word.jlpt.clone().unwrap_or_default(),
-            jp,
-            cn,
+            word.examples_jp.clone(),
+            word.examples_cn.clone(),
             word.note.clone(),
         ];
         if row

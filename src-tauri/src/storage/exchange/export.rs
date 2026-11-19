@@ -139,7 +139,7 @@ pub(super) fn controlled(
             tx.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now')", [], |row| {
                 row.get(0)
             })?;
-        write!(output,"{{\"format\":\"nyako-wordbook\",\"version\":2,\"source_namespace\":{},\"exported_at\":{},\"words\":[",encode(&namespace)?,encode(&exported_at)?)?;
+        write!(output,"{{\"format\":\"nyako-wordbook\",\"version\":1,\"source_namespace\":{},\"exported_at\":{},\"words\":[",encode(&namespace)?,encode(&exported_at)?)?;
         for (index, word_id) in ids.iter().enumerate() {
             control.check()?;
             control

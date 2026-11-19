@@ -34,9 +34,9 @@ test('home exposes import beside the word list and opens data management', async
 test('reading opens beside the index and returning to the list preserves its rows', async () => {
   const id = crypto.randomUUID();
   mocks.vocabulary.mockImplementation(request => Promise.resolve(request.operation === 'list_words'
-    ? { words: [{ id, kanji: '猫', kana: 'ねこ', meaning: '猫', pos: [], sense_count: 1, revision: 1 }], total: 1, next_cursor: null }
+    ? { words: [{ id, kanji: '猫', kana: 'ねこ', meaning: '猫', pos: [], revision: 1 }], total: 1, next_cursor: null }
     : request.operation === 'get_word'
-      ? { content: { id, kanji: '猫', kana: 'ねこ', jlpt: null, pos: [], pitches: [], senses: [{ id: 'sense', meaning: '猫' }], examples: [], library_ids: [], note: '' }, revision: 1 }
+      ? { content: { id, kanji: '猫', kana: 'ねこ', jlpt: null, pos: [], pitch: '', meaning: '猫', examples_jp: '', examples_cn: '', library_ids: [], note: '' }, revision: 1 }
       : []));
   app.unmount(); app = createApp(LibraryView); app.mount(host); await settle();
   expect(host.querySelector('.reading-workspace .formal-detail h2')?.textContent).toBe('猫');
@@ -53,9 +53,9 @@ test('reading opens beside the index and returning to the list preserves its row
 test('list shows readable verb labels and keeps advanced filters collapsed', async () => {
   const id = crypto.randomUUID();
   mocks.vocabulary.mockImplementation(request => Promise.resolve(request.operation === 'list_words'
-    ? { words: [{ id, kanji: '開く', kana: 'あく', meaning: '开', pos: ['godan_verb', 'intransitive'], sense_count: 1, revision: 1, jlpt: 'N4', card_state: 'new' }], total: 1, next_cursor: null }
+    ? { words: [{ id, kanji: '開く', kana: 'あく', meaning: '开', pos: ['godan_verb', 'intransitive'], revision: 1, jlpt: 'N4', card_state: 'new' }], total: 1, next_cursor: null }
     : request.operation === 'get_word'
-      ? { content: { id, kanji: '開く', kana: 'あく', jlpt: 'N4', pos: ['godan_verb', 'intransitive'], pitches: [], senses: [{ id: 'sense', meaning: '开' }], examples: [], library_ids: [], note: '' }, revision: 1 }
+      ? { content: { id, kanji: '開く', kana: 'あく', jlpt: 'N4', pos: ['godan_verb', 'intransitive'], pitch: '', meaning: '开', examples_jp: '', examples_cn: '', library_ids: [], note: '' }, revision: 1 }
       : []));
   app.unmount(); app = createApp(LibraryView); app.mount(host); await settle();
   expect(host.querySelector('.formal-row .row-meta')?.textContent).toContain('五段动词 / 自动词');
@@ -65,25 +65,24 @@ test('list shows readable verb labels and keeps advanced filters collapsed', asy
   expect(host.querySelector('.detail-meta')?.textContent).toContain('五段动词 / 自动词');
 });
 
-test('detail delete previews impact, requires two confirmations, and closes after deletion', async () => {
+test('editor delete previews impact and closes reader after confirmation', async () => {
   const id = crypto.randomUUID();
   let deleted = false;
   mocks.vocabulary.mockImplementation(request => {
-    if (request.operation === 'list_words') return Promise.resolve({ words: deleted ? [] : [{ id, kanji: '猫', kana: 'ねこ', meaning: '猫', pos: [], sense_count: 1, revision: 3 }], total: deleted ? 0 : 1, next_cursor: null });
-    if (request.operation === 'get_word') return Promise.resolve({ content: { id, kanji: '猫', kana: 'ねこ', jlpt: null, pos: [], pitches: [], senses: [{ id: 'sense', meaning: '猫' }], examples: [], library_ids: [], note: '' }, revision: 3 });
+    if (request.operation === 'list_words') return Promise.resolve({ words: deleted ? [] : [{ id, kanji: '猫', kana: 'ねこ', meaning: '猫', pos: [], revision: 3 }], total: deleted ? 0 : 1, next_cursor: null });
+    if (request.operation === 'get_word') return Promise.resolve({ content: { id, kanji: '猫', kana: 'ねこ', jlpt: null, pos: [], pitch: '', meaning: '猫', examples_jp: '', examples_cn: '', library_ids: [], note: '' }, revision: 3 });
     if (request.operation === 'delete_impact') return Promise.resolve({ memberships: 1, cards: 2, events: 3 });
     if (request.operation === 'batch') { deleted = true; return Promise.resolve(1); }
     return Promise.resolve([]);
   });
   app.unmount(); app = createApp(LibraryView); app.mount(host); await settle();
   host.querySelector<HTMLElement>('.formal-row')!.click(); await settle();
+  button('编辑词条').click(); await settle();
   button('删除词条').click(); await settle();
   expect(mocks.vocabulary).toHaveBeenCalledWith({ operation: 'delete_impact', selected: [{ id, revision: 3 }] });
-  expect(host.querySelector('[role="dialog"]')?.textContent).toContain('2 张卡片及 3 条历史事件');
+  expect(host.querySelector('[role="dialog"]')?.textContent).toContain('2 张卡片和 3 条学习记录');
   expect(mocks.vocabulary.mock.calls.some(([request]) => request.operation === 'batch')).toBe(false);
-  button('我已了解，继续确认').click(); await settle();
-  expect(mocks.vocabulary.mock.calls.some(([request]) => request.operation === 'batch')).toBe(false);
-  button('确认执行').click(); await settle();
+  button('确认删除').click(); await settle();
   expect(mocks.vocabulary).toHaveBeenCalledWith({ operation: 'batch', selected: [{ id, revision: 3 }], action: 'delete', target: null });
   await settleTransition();
   expect(host.querySelector('.formal-detail')).toBeNull();
@@ -121,9 +120,9 @@ test('discarding dirty library after a window close completes exit', async () =>
 
 test('arrows and J/K move activity, Enter opens once, Escape restores focus and typing remains isolated', async () => {
   mocks.vocabulary.mockImplementation(request => Promise.resolve(request.operation === 'list_words'
-    ? { words: ['a', 'b', 'c'].map(id => ({ id, kanji: id, kana: id, meaning: id, pos: [], sense_count: 1, revision: 1 })), total: 3, next_cursor: null }
+    ? { words: ['a', 'b', 'c'].map(id => ({ id, kanji: id, kana: id, meaning: id, pos: [], revision: 1 })), total: 3, next_cursor: null }
     : request.operation === 'get_word'
-      ? { content: { id: request.id, kanji: request.id, kana: request.id, jlpt: null, pos: [], pitches: [], senses: [], examples: [], library_ids: [], note: '' }, revision: 1 }
+      ? { content: { id: request.id, kanji: request.id, kana: request.id, jlpt: null, pos: [], pitch: '', meaning: '释义', examples_jp: '', examples_cn: '', library_ids: [], note: '' }, revision: 1 }
       : []));
   app.unmount(); app = createApp(LibraryView); app.mount(host); await settle();
   button('列表').click(); await settle(); mocks.vocabulary.mockClear();
@@ -161,9 +160,9 @@ test('closing during a detail load prevents a late request from reopening or ste
   let resolveOld!: (value: unknown) => void;
   const pending = new Promise(resolve => { resolveOld = resolve; });
   mocks.vocabulary.mockImplementation(request => {
-    if (request.operation === 'list_words') return Promise.resolve({ words: ['a', 'b'].map(id => ({ id, kanji: id, kana: id, meaning: id, pos: [], sense_count: 1, revision: 1 })), total: 2, next_cursor: null });
+    if (request.operation === 'list_words') return Promise.resolve({ words: ['a', 'b'].map(id => ({ id, kanji: id, kana: id, meaning: id, pos: [], revision: 1 })), total: 2, next_cursor: null });
     if (request.operation === 'get_word' && request.id === 'a') return pending;
-    if (request.operation === 'get_word') return Promise.resolve({ content: { id: 'b', kanji: 'b', kana: 'b', jlpt: null, pos: [], pitches: [], senses: [], examples: [], library_ids: [], note: '' }, revision: 2 });
+    if (request.operation === 'get_word') return Promise.resolve({ content: { id: 'b', kanji: 'b', kana: 'b', jlpt: null, pos: [], pitch: '', meaning: '释义', examples_jp: '', examples_cn: '', library_ids: [], note: '' }, revision: 2 });
     return Promise.resolve([]);
   });
   app.unmount(); app = createApp(LibraryView); app.mount(host); await settle();
@@ -194,10 +193,10 @@ test('library name input explains and enforces the backend limit', async () => {
 });
 
 test('reading follows keyboard selection and continues across page boundaries', async () => {
-  const rows = ['a', 'b', 'c'].map(id => ({ id, kanji: id, kana: id, meaning: id, pos: [], sense_count: 1, revision: 1 }));
+  const rows = ['a', 'b', 'c'].map(id => ({ id, kanji: id, kana: id, meaning: id, pos: [], revision: 1 }));
   mocks.vocabulary.mockImplementation(request => {
     if (request.operation === 'list_words') return Promise.resolve({ words: request.cursor ? [rows[2]] : rows.slice(0, 2), total: 3, next_cursor: request.cursor ? null : 'next' });
-    if (request.operation === 'get_word') return Promise.resolve({ content: { id: request.id, kanji: request.id, kana: request.id, jlpt: null, pos: [], pitches: [], senses: [{ id: 'sense', meaning: request.id }], examples: [], library_ids: [], note: '' }, revision: 1 });
+    if (request.operation === 'get_word') return Promise.resolve({ content: { id: request.id, kanji: request.id, kana: request.id, jlpt: null, pos: [], pitch: '', meaning: request.id, examples_jp: '', examples_cn: '', library_ids: [], note: '' }, revision: 1 });
     return Promise.resolve([]);
   });
   app.unmount(); app = createApp(LibraryView); app.mount(host); await settle();
@@ -218,9 +217,9 @@ test('reading follows keyboard selection and continues across page boundaries', 
 test('failed reading keeps retry available and does not display the previous word', async () => {
   let failed = true;
   mocks.vocabulary.mockImplementation(request => {
-    if (request.operation === 'list_words') return Promise.resolve({ words: [{ id: 'a', kanji: '猫', kana: 'ねこ', meaning: '猫', pos: [], sense_count: 1, revision: 1 }], total: 1, next_cursor: null });
+    if (request.operation === 'list_words') return Promise.resolve({ words: [{ id: 'a', kanji: '猫', kana: 'ねこ', meaning: '猫', pos: [], revision: 1 }], total: 1, next_cursor: null });
     if (request.operation === 'get_word' && failed) return Promise.reject(new Error('读取失败'));
-    if (request.operation === 'get_word') return Promise.resolve({ content: { id: 'a', kanji: '猫', kana: 'ねこ', jlpt: null, pos: [], pitches: [], senses: [{ id: 'sense', meaning: '猫' }], examples: [], library_ids: [], note: '' }, revision: 1 });
+    if (request.operation === 'get_word') return Promise.resolve({ content: { id: 'a', kanji: '猫', kana: 'ねこ', jlpt: null, pos: [], pitch: '', meaning: '猫', examples_jp: '', examples_cn: '', library_ids: [], note: '' }, revision: 1 });
     return Promise.resolve([]);
   });
   app.unmount(); app = createApp(LibraryView); app.mount(host); await settle();
@@ -234,8 +233,8 @@ test('narrow windows open a dedicated reader and return to the same index', asyn
   const change = { listener: undefined as undefined | ((event: { matches: boolean }) => void) };
   vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener: (_: string, listener: typeof change.listener) => { change.listener = listener; }, removeEventListener: vi.fn() }));
   mocks.vocabulary.mockImplementation(request => Promise.resolve(request.operation === 'list_words'
-    ? { words: [{ id: 'a', kanji: '猫', kana: 'ねこ', meaning: '猫', pos: [], sense_count: 1, revision: 1 }], total: 1, next_cursor: null }
-    : request.operation === 'get_word' ? { content: { id: 'a', kanji: '猫', kana: 'ねこ', jlpt: null, pos: [], pitches: [], senses: [], examples: [], library_ids: [], note: '' }, revision: 1 } : []));
+    ? { words: [{ id: 'a', kanji: '猫', kana: 'ねこ', meaning: '猫', pos: [], revision: 1 }], total: 1, next_cursor: null }
+    : request.operation === 'get_word' ? { content: { id: 'a', kanji: '猫', kana: 'ねこ', jlpt: null, pos: [], pitch: '', meaning: '释义', examples_jp: '', examples_cn: '', library_ids: [], note: '' }, revision: 1 } : []));
   try {
     app.unmount(); app = createApp(LibraryView); app.mount(host); await settle();
     expect(host.querySelector('.formal-detail')).toBeNull();
