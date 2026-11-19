@@ -1377,3 +1377,64 @@ fn stale_preview_and_cancel_leave_no_business_changes() {
         0
     );
 }
+
+#[test]
+fn ordinary_excel_automatically_identifies_reimports_without_user_namespace() {
+    let root = tempfile::tempdir().unwrap();
+    let mut conn = database(root.path());
+    let path = root.path().join("ordinary.xlsx");
+    let mut book = rust_xlsxwriter::Workbook::new();
+    let sheet = book.add_worksheet();
+    for (index, label) in super::excel::LABELS.iter().enumerate() {
+        sheet.write_string(0, index as u16, *label).unwrap();
+    }
+    for (column, value) in [(0, "cat"), (1, "猫"), (2, "ねこ"), (3, "猫咪")] {
+        sheet.write_string(1, column, value).unwrap();
+    }
+    book.save(&path).unwrap();
+    let automatic: ImportOptions =
+        serde_json::from_value(serde_json::json!({"excel":{"sheet":null,"headers":true}})).unwrap();
+    let first = preview(root.path(), &path, &automatic).unwrap();
+    assert!(first.source_namespace.starts_with("nyako:excel:file:"));
+    super::import::prepare(&conn, root.path(), &first.task_id).unwrap();
+    assert_eq!(
+        commit(
+            &mut conn,
+            root.path(),
+            &first.task_id,
+            options(),
+            &jobs::Control::default()
+        )
+        .unwrap()
+        .created,
+        1
+    );
+    book.worksheets_mut()[0]
+        .write_string(1, 3, "更新后的释义")
+        .unwrap();
+    book.save(&path).unwrap();
+    let second = preview(root.path(), &path, &automatic).unwrap();
+    assert_eq!(first.source_namespace, second.source_namespace);
+    super::import::prepare(&conn, root.path(), &second.task_id).unwrap();
+    let rows = super::import::page(&conn, root.path(), &second.task_id, 0, false).unwrap();
+    assert_eq!(rows[0].classification, "update");
+    assert!(rows[0].matched.is_some());
+    assert_eq!(
+        commit(
+            &mut conn,
+            root.path(),
+            &second.task_id,
+            options(),
+            &jobs::Control::default()
+        )
+        .unwrap()
+        .unchanged,
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT meaning FROM words", [], |row| row
+            .get::<_, String>(0))
+            .unwrap(),
+        "猫咪"
+    );
+}

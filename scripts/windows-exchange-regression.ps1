@@ -39,7 +39,9 @@ function Click([string]$Name){
  $watch=[Diagnostics.Stopwatch]::StartNew()
  do {$button=Element $Name ([Windows.Automation.ControlType]::Button);if($button.Current.IsEnabled){break};Start-Sleep -Milliseconds 100}while($watch.Elapsed.TotalSeconds -lt 15)
  if(!$button.Current.IsEnabled){throw "Button disabled: $Name"}
- $button.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke();Start-Sleep -Milliseconds 300
+ $pattern=$null
+ if($button.TryGetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$pattern)){if($pattern.Current.ExpandCollapseState -ne [Windows.Automation.ExpandCollapseState]::Expanded){$pattern.Expand()}}elseif($button.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)){$pattern.Invoke()}else{$button.SetFocus();Add-Type -AssemblyName System.Windows.Forms;[Windows.Forms.SendKeys]::SendWait(' ')}
+ Start-Sleep -Milliseconds 300
 }
 function Fill([string]$Name,[string]$Value){
  (Element $Name ([Windows.Automation.ControlType]::Edit)).GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).SetValue($Value)
@@ -99,11 +101,10 @@ function Result([string]$Message,[string]$Path=''){
  Click '知道了'
 }
 function Preview([int]$Count){
- Click '全量校验并预览'
- [void](Element '确认并原子提交' ([Windows.Automation.ControlType]::Button))
+ [void](Element '导入词条' ([Windows.Automation.ControlType]::Button))
  Assert-Text "共 $Count 行 $Count 条有效 0 条错误"
 }
-function Commit([string]$Message){Click '确认并原子提交';Click '确认执行';Result $Message}
+function Commit([string]$Message){Click '导入词条';Click '确认执行';Result $Message}
 function Select-Word([string]$Writing){
  Fill '搜索真实词条' $Writing
  Start-Sleep -Milliseconds 350
@@ -125,6 +126,7 @@ function Assert-Export([string]$Path,$Expected){
 function Export-Word([string]$Label,$Expected){
  Select-Word $Expected.kanji
  $output=Join-Path $DataRoot ("$Label-$run.json")
+ Click '其他格式 · JSON'
  Click '导出 JSON';File-Dialog $output;Result 'JSON 已导出：' $output
  $document=Assert-Export $output $Expected
  Click '← 返回词库'
@@ -182,6 +184,7 @@ try{
  Assert-Text ([regex]::Escape("$library 2"))
  Select-Word $cat.kanji
  $json=Join-Path $DataRoot ("export-$run.json")
+ Click '其他格式 · JSON'
  Click '导出 JSON';File-Dialog $json;Result 'JSON 已导出：' $json
  $script:original=Assert-Export $json $cat
  $xlsx=Join-Path $DataRoot ("export-$run.xlsx")
@@ -189,12 +192,14 @@ try{
  Assert-Workbook $xlsx @($script:original.words[0].external_id,$cat.kanji,$cat.kana,$cat.meaning,'noun',$cat.pitch,'N5',$cat.examples_jp,$cat.examples_cn,$cat.note)
  Click '导入'
  Fill '文件路径（也可拖入）' $xlsx
- Fill '来源标识' $script:original.source_namespace
+ Click '表格格式与更多操作'
+ Click '检查并预览'
  Fill '新建词库' $roundtrip
  Click '查看样本'
  Assert-Text '备份中的第二义项'
  Preview 1
- Click '相同内容复用'
+ Click '批量处理重复词条与错误'
+ Click '相同词条保留已有'
  Commit '导入完成：新增 0 条，更新 0 条，未变化 1 条，跳过 0 条。'
  Click '← 返回词库'
  Assert-Text ([regex]::Escape("$roundtrip 1"))

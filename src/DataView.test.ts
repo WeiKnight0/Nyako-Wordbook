@@ -44,14 +44,14 @@ test('preview errors require explicit valid-only confirmation and are shown befo
     if (command === 'exchange_status') return { id: args.id, state: 'completed', processed: 2, cancellable: false, result: args.id === 'preview' ? previewResult({ errors: 1, total: 2 }) : args.id === 'import_summary' ? summaryResult({ error: 1 }) : [{ line: 2, content: null, error: '假名缺失', candidates: [], matched: null, present: [] }] };
   });
   button('选择文件').click(); await settle();
-  button('全量校验并预览').click(); await settle();
+  button('检查并预览').click(); await settle();
   expect(host.textContent).toContain('假名缺失');
-  expect(button('确认并原子提交').disabled).toBe(true);
+  expect(button('导入词条').disabled).toBe(true);
   fill('新建词库', '导入词库');
   const checkbox = [...host.querySelectorAll<HTMLInputElement>('input[type=checkbox]')].find(input => input.parentElement?.textContent?.includes('我确认仅导入有效行'))!;
   checkbox.checked = true; checkbox.dispatchEvent(new Event('change', { bubbles: true })); await settle();
-  expect(button('确认并原子提交').disabled).toBe(false);
-  button('确认并原子提交').click(); await settle();
+  expect(button('导入词条').disabled).toBe(false);
+  button('导入词条').click(); await settle();
   expect(host.querySelector('[role="dialog"]')?.textContent).toContain('跳过 1 条错误行');
   expect(mocks.invoke.mock.calls.some(([command, args]) => command === 'exchange' && args.request.operation === 'commit')).toBe(false);
   button('取消').click(); await settle();
@@ -83,8 +83,8 @@ test('single-sheet Excel previews ten columns without mapping', async () => {
   button('选择文件').click(); await settle();
   button('查看样本').click(); await settle();
   expect(host.textContent).toContain('ねこ');
-  button('全量校验并预览').click(); await settle();
-  expect(mocks.invoke).toHaveBeenCalledWith('exchange', { request: { operation:'preview', path:'/words.xlsx', options:{ source_namespace:'nyako:excel:local',excel:{sheet:null,headers:true} } } });
+  button('检查并预览').click(); await settle();
+  expect(mocks.invoke).toHaveBeenCalledWith('exchange', { request: { operation:'preview', path:'/words.xlsx', options:{ excel:{sheet:null,headers:true} } } });
 });
 
 test('explicit selection exports ids without a library scope', async () => {
@@ -143,16 +143,16 @@ test('changing the source invalidates preview, decisions and valid-only consent'
     if (command === 'exchange_status') return { state: 'completed', result: args.id === 'preview' ? previewResult({ errors: 1, total: 2 }) : args.id === 'import_summary' ? summaryResult({ error: 1 }) : [] };
   });
   fill('文件路径', '/source.json'); await settle();
-  button('全量校验并预览').click(); await settle();
+  button('检查并预览').click(); await settle();
   fill('新建词库', '目标');
   const consent = [...host.querySelectorAll<HTMLInputElement>('input[type=checkbox]')].find(input => input.parentElement?.textContent?.includes('我确认仅导入有效行'))!;
   consent.checked = true; consent.dispatchEvent(new Event('change', { bubbles: true })); await settle();
-  expect(button('确认并原子提交').disabled).toBe(false);
-  fill('来源标识', 'another-source'); await settle();
-  expect(button('确认并原子提交')).toBeUndefined();
+  expect(button('导入词条').disabled).toBe(false);
+  fill('文件路径', '/another-source.json'); await settle();
+  expect(button('导入词条')).toBeUndefined();
   expect(host.textContent).toContain('请重新校验后提交');
-  button('全量校验并预览').click(); await settle();
-  expect(button('确认并原子提交').disabled).toBe(true);
+  button('检查并预览').click(); await settle();
+  expect(button('导入词条').disabled).toBe(true);
   expect([...host.querySelectorAll<HTMLInputElement>('input[type=checkbox]')].find(input => input.parentElement?.textContent?.includes('我确认仅导入有效行'))?.checked).toBe(false);
 });
 
@@ -163,16 +163,16 @@ test('whole-file conflicts block commit and can be located beyond the first page
     if (command === 'exchange_status') return { state: 'completed', result: args.id === 'preview' ? previewResult({ valid: 51, total: 51 }) : args.id === 'import_summary' ? summaryResult({ new: 50, ambiguous: 1, unresolved_lines: [51] }) : pageOffset === 50 ? [{ line: 51, classification: 'ambiguous', present: ['kanji', 'kana', 'meaning'], content: { kanji: '猫', kana: 'ねこ', meaning: '猫' }, candidates: [{ id: 'existing', kana: 'ねこ', meaning: '猫', content: {} }], matched: null }] : [] };
   });
   fill('文件路径', '/source.json'); await settle();
-  button('全量校验并预览').click(); await settle(); fill('新建词库', '目标'); await settle();
-  expect(host.textContent).toContain('尚有 1 条身份需要确认');
-  expect(button('确认并原子提交').disabled).toBe(true);
+  button('检查并预览').click(); await settle(); fill('新建词库', '目标'); await settle();
+  expect(host.textContent).toContain('尚有 1 条重复词条需要确认');
+  expect(button('导入词条').disabled).toBe(true);
   button('定位待处理项').click(); await settle();
   expect(mocks.invoke).toHaveBeenCalledWith('exchange', { request: { operation: 'page', task_id: 'task', offset: 50, errors: false } });
   expect(document.activeElement?.id).toBe('import-row-51');
   const identity = host.querySelector<HTMLSelectElement>('#import-row-51 .choice-grid select')!;
   identity.value = 'skip'; identity.dispatchEvent(new Event('change', { bubbles: true })); await settle();
-  expect(host.textContent).toContain('尚有 0 条身份需要确认');
-  expect(button('确认并原子提交').disabled).toBe(false);
+  expect(host.textContent).toContain('尚有 0 条重复词条需要确认');
+  expect(button('导入词条').disabled).toBe(false);
 });
 
 test('resuming a task restores file and actual source before committing and emits changes', async () => {
@@ -185,10 +185,10 @@ test('resuming a task restores file and actual source before committing and emit
   button('检查未完成导入').click(); await settle();
   button('task · 1 条有效 · 重新核对').click(); await settle();
   expect(host.querySelector<HTMLInputElement>('.file-picker input')?.value).toBe('/original.xlsx');
-  expect(host.querySelector<HTMLInputElement>('.import-settings input')?.value).toBe('original-source');
+  expect(host.textContent).not.toContain('来源标识');
   fill('新建词库', '恢复目标'); await settle();
-  button('确认并原子提交').click(); await settle();
-  expect(host.querySelector('[role=dialog]')?.textContent).toContain('来源：original-source');
+  button('导入词条').click(); await settle();
+  expect(host.querySelector('[role=dialog]')?.textContent).not.toContain('original-source');
   expect(host.querySelector('[role=dialog]')?.textContent).toContain('恢复目标');
   expect(host.querySelector('.data-view > div')?.hasAttribute('inert')).toBe(true);
   button('确认执行').click(); await settle();
@@ -207,8 +207,8 @@ test('reactivating the data view refreshes library choices without dropping the 
   mocks.libraries.mockResolvedValue([{ id: 'new-library', name: '新建的词库' }]);
   visible.value = true; await settle();
   expect(host.querySelector<HTMLInputElement>('.file-picker input')?.value).toBe('/kept.xlsx');
-  expect(host.querySelector('.destination select')?.textContent).toContain('新建的词库');
-  expect(host.querySelector('.destination select')?.textContent).not.toContain('不指定词库');
+  expect(host.querySelector('.export-library select')?.textContent).toContain('新建的词库');
+  expect(host.querySelector('.export-library select')?.textContent).not.toContain('不指定词库');
 });
 
 test('running task blocks close and exposes cancellation independently', async () => {
@@ -219,7 +219,7 @@ test('running task blocks close and exposes cancellation independently', async (
     if (command === 'exchange_status') return { id: 'running', state: 'running', processed: 10, cancellable: true };
   });
   button('选择文件').click(); await settle();
-  button('全量校验并预览').click(); await settle();
+  button('检查并预览').click(); await settle();
   const preventDefault = vi.fn(); mocks.close!({ preventDefault });
   expect(preventDefault).toHaveBeenCalledOnce();
   button('取消当前任务').click(); await settle();
@@ -227,4 +227,29 @@ test('running task blocks close and exposes cancellation independently', async (
   mocks.invoke.mockResolvedValue({ id: 'running', state: 'cancelled', error: { message: '已取消' } });
   await vi.advanceTimersByTimeAsync(200); await settle();
   expect(host.textContent).toContain('已取消');
+});
+
+test('choosing a file automatically previews it and suggests its name without source controls', async () => {
+  mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === 'exchange_file') return 'D:\\words\\旅行.xlsx';
+    if (command === 'exchange') return { job_id: args.request.operation };
+    if (command === 'exchange_status') return { state: 'completed', result: args.id === 'preview' ? previewResult({ path: 'D:\\words\\旅行.xlsx', format: 'xlsx' }) : args.id === 'import_summary' ? summaryResult() : [] };
+  });
+  button('选择文件').click(); await settle();
+  expect(mocks.invoke).toHaveBeenCalledWith('exchange', { request: { operation: 'preview', path: 'D:\\words\\旅行.xlsx', options: { excel: { sheet: null, headers: true } } } });
+  expect(host.querySelector<HTMLInputElement>('.destination input')?.value).toBe('旅行');
+  expect(host.textContent).not.toMatch(/来源标识|实际来源|原子提交/);
+  expect(button('导入词条').disabled).toBe(false);
+});
+
+test('export scope is separate from import destination and supports both selection and library', async () => {
+  app.unmount(); app = createApp(DataView, { selected: ['chosen'] }); app.mount(host); await settle();
+  const wholeLibrary = host.querySelector<HTMLInputElement>('.scope-options input[value="false"]')!;
+  wholeLibrary.checked = true; wholeLibrary.dispatchEvent(new Event('change', { bubbles: true })); await settle();
+  expect(button('导出 Excel').disabled).toBe(true);
+  const library = host.querySelector<HTMLSelectElement>('.export-library select')!;
+  library.value = 'library'; library.dispatchEvent(new Event('change', { bubbles: true })); await settle();
+  mocks.invoke.mockImplementation(async (command, args) => command === 'exchange_file' ? '/words.xlsx' : command === 'exchange_target' ? null : command === 'exchange' ? { job_id: args.request.operation } : { state: 'completed', result: { words: 3 } });
+  button('导出 Excel').click(); await settle();
+  expect(mocks.invoke).toHaveBeenCalledWith('exchange', { request: { operation: 'export', options: { path: '/words.xlsx', format: 'xlsx', library_id: 'library', selected: [], expected: null } } });
 });

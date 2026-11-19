@@ -148,6 +148,7 @@ use std::{collections::HashSet, fs::File, io::Read, path::Path};
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ImportOptions {
+    #[serde(default)]
     pub source_namespace: String,
     #[serde(default)]
     pub excel: excel::ExcelOptions,
@@ -316,8 +317,20 @@ pub(super) fn preview_controlled(
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("xlsx"));
     let (namespace, total) = if is_excel {
-        let (namespace, rows, present) =
-            excel::parse(&bytes, &options.excel, &options.source_namespace, control)?;
+        let automatic_namespace = format!(
+            "nyako:excel:file:{}",
+            hash(source.canonicalize()?.to_string_lossy().as_bytes())
+        );
+        let (namespace, rows, present) = excel::parse(
+            &bytes,
+            &options.excel,
+            if options.source_namespace.is_empty() {
+                &automatic_namespace
+            } else {
+                &options.source_namespace
+            },
+            control,
+        )?;
         let total = rows.len();
         for (line, word) in rows {
             stage_row(&tx, line, word, &present)?;
