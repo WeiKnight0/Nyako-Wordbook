@@ -109,58 +109,6 @@ pub(super) fn prepare(conn: &Connection, root: &Path, task: &str) -> Result<(), 
     Ok(())
 }
 
-/// @description 列出已完整预览且尚未提交的暂存任务，不自动续写。
-/// @param conn 正式库；root 数据根目录。
-/// @throws 文件或暂存库读取失败时返回错误。
-pub(super) fn pending(conn: &Connection, root: &Path) -> Result<Vec<Preview>, AppError> {
-    let mut result = Vec::new();
-    for entry in std::fs::read_dir(root.join("staging"))? {
-        let path = entry?.path();
-        if !path.join("import.sqlite3").is_file() {
-            continue;
-        }
-        let task = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| AppError::validation("暂存目录名称无效"))?;
-        let staged = stage(root, task)?;
-        let ready = staged.query_row(
-            "SELECT count(*) FROM metadata WHERE key IN ('preview','target_snapshot')",
-            [],
-            |row| row.get::<_, i64>(0),
-        )? == 2;
-        let committed = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM import_jobs WHERE id=?1 AND status='committed')",
-            [task],
-            |row| row.get::<_, bool>(0),
-        )?;
-        if ready && !committed {
-            let mut preview: Preview = metadata(&staged, "preview")?;
-            preview.path = metadata(&staged, "source")?;
-            result.push(preview);
-        }
-    }
-    Ok(result)
-}
-
-/// @description 显式重新核对遗留任务，重新选择冲突策略后才可提交。
-/// @param conn 正式库；root 数据根；task 已暂存任务标识。
-/// @throws 源文件变动或读取错误时拒绝继续。
-pub(super) fn resume(conn: &Connection, root: &Path, task: &str) -> Result<Preview, AppError> {
-    let staged = stage(root, task)?;
-    let mut preview: Preview = metadata(&staged, "preview")?;
-    let source: PathBuf = metadata(&staged, "source")?;
-    preview.path = source.clone();
-    if hash(&read_source(&source)?) != preview.file_hash {
-        return Err(AppError::new(
-            "IMPORT_SOURCE_CHANGED",
-            "源文件已变化，请重新预览",
-        ));
-    }
-    prepare(conn, root, task)?;
-    Ok(preview)
-}
-
 fn candidates(
     conn: &Connection,
     word: &ExchangeWord,

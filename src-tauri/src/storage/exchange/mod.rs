@@ -20,13 +20,9 @@ use std::sync::atomic::Ordering;
 #[derive(Debug, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub(crate) enum ExchangeRequest {
-    PendingImports,
     ExcelTemplate {
         path: std::path::PathBuf,
         expected: Option<output::Fingerprint>,
-    },
-    ResumeImport {
-        task_id: String,
     },
     Preview {
         path: std::path::PathBuf,
@@ -84,10 +80,6 @@ pub(super) fn execute(
         ExchangeRequest::ExcelTemplate { path, expected } => {
             excel_template::save(&path, expected.as_ref(), control)?;
             Ok(serde_json::json!({"saved":true}))
-        }
-        ExchangeRequest::PendingImports => serde_json::to_value(import::pending(conn, root)?),
-        ExchangeRequest::ResumeImport { task_id } => {
-            serde_json::to_value(import::resume(conn, root, &task_id)?)
         }
         ExchangeRequest::Preview { .. } | ExchangeRequest::InspectExcel { .. } => {
             return Err(AppError::validation("预览必须先在独立文件任务中解析"))

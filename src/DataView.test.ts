@@ -31,6 +31,7 @@ test('data tasks use a full-width workspace and keep import available from the f
   expect(main.querySelector('.data-tabs [aria-current="page"]')?.textContent).toBe('导入');
   expect(main.querySelector('[aria-label="导入词条"]')).not.toBeNull();
   expect(button('选择文件')).not.toBeNull();
+  expect(button('检查未完成导入')).toBeUndefined();
   button('备份与恢复').click(); await settle();
   expect(main.querySelector('.data-tabs [aria-current="page"]')?.textContent).toBe('备份与恢复');
   button('导入').click(); await settle();
@@ -175,15 +176,15 @@ test('whole-file conflicts block commit and can be located beyond the first page
   expect(button('导入词条').disabled).toBe(false);
 });
 
-test('resuming a task restores file and actual source before committing and emits changes', async () => {
+test('preview commit confirms destination and emits changes', async () => {
   const changed = vi.fn();
   app.unmount(); app = createApp(DataView, { onChanged: changed }); app.mount(host); await settle();
   mocks.invoke.mockImplementation(async (command, args) => {
     if (command === 'exchange') return { job_id: args.request.operation };
-    if (command === 'exchange_status') return { state: 'completed', result: args.id === 'pending_imports' ? [previewResult()] : args.id === 'resume_import' ? previewResult({ path: '/original.xlsx', source_namespace: 'original-source' }) : args.id === 'import_summary' ? summaryResult() : args.id === 'commit' ? { created: 1, updated: 0, unchanged: 0, skipped: 0 } : [] };
+    if (command === 'exchange_status') return { state: 'completed', result: args.id === 'preview' ? previewResult({ path: '/original.xlsx', source_namespace: 'original-source' }) : args.id === 'import_summary' ? summaryResult() : args.id === 'commit' ? { created: 1, updated: 0, unchanged: 0, skipped: 0 } : [] };
   });
-  button('检查未完成导入').click(); await settle();
-  button('task · 1 条有效 · 重新核对').click(); await settle();
+  fill('文件路径', '/original.xlsx'); await settle();
+  button('检查并预览').click(); await settle();
   expect(host.querySelector<HTMLInputElement>('.file-picker input')?.value).toBe('/original.xlsx');
   expect(host.textContent).not.toContain('来源标识');
   fill('新建词库', '恢复目标'); await settle();

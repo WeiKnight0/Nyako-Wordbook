@@ -1285,38 +1285,6 @@ fn import_summary_covers_all_pages_and_preserves_field_presence() {
 }
 
 #[test]
-fn unfinished_preview_reopens_and_explicit_resume_rechecks_source() {
-    let root = tempfile::tempdir().unwrap();
-    let conn = database(root.path());
-    let source = file(root.path());
-    let task = preview_file(root.path(), &conn, &source);
-    assert_eq!(task.path, source);
-    super::import::stage(root.path(), &task.task_id)
-        .unwrap()
-        .execute(
-            "UPDATE metadata SET value=json_remove(value,'$.path') WHERE key='preview'",
-            [],
-        )
-        .unwrap();
-    drop(conn);
-    let conn = Connection::open(root.path().join("data/main.sqlite3")).unwrap();
-    let pending = super::import::pending(&conn, root.path()).unwrap();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].task_id, task.task_id);
-    assert_eq!(pending[0].path, source);
-    let resumed = super::import::resume(&conn, root.path(), &task.task_id).unwrap();
-    assert_eq!(resumed.valid, 1);
-    assert_eq!(resumed.path, source);
-    std::fs::write(source, "changed").unwrap();
-    assert_eq!(
-        super::import::resume(&conn, root.path(), &task.task_id)
-            .unwrap_err()
-            .code,
-        "IMPORT_SOURCE_CHANGED"
-    );
-}
-
-#[test]
 fn stale_preview_and_cancel_leave_no_business_changes() {
     let root = tempfile::tempdir().unwrap();
     let mut conn = database(root.path());

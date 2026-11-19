@@ -46,15 +46,6 @@ const library = ref('');
 const newLibrary = ref('');
 const preview = ref<Preview>();
 const summary = ref<ImportSummary>();
-const pendingImports = ref<Preview[]>([]);
-async function findPending() { await action(async () => { pendingImports.value = await exchange<Preview[]>({ operation: 'pending_imports' }); }); }
-async function resumeImport(task: string) {
-  await action(async () => {
-    resetPreview();
-    await loadPreview(await exchange<Preview>({ operation: 'resume_import', task_id: task }));
-    notice.value = '已重新检查文件和当前词库，请核对重复词条及保存位置。';
-  });
-}
 const rows = ref<Row[]>([]);
 const choices = ref<Record<number, Choice>>({});
 const offset = ref(0);
@@ -294,7 +285,7 @@ onBeforeUnmount(() => { unlisten?.(); unlistenClose?.(); });
       <div v-if="preview" class="commit-bar"><div><strong>准备导入 {{ preview.valid }} 条有效词条</strong><p v-if="!destinationReady">请选择目标词库或填写新词库名称。</p><p v-else-if="unresolved.length || invalidChoices.length">请先处理待确认的重复词条，再提交整批数据。</p><p v-else>已有词条默认保留原内容，可在预览中修改处理方式。</p><label v-if="preview.errors"><input v-model="validOnly" type="checkbox" />我确认仅导入有效行</label></div><button :disabled="!summary || !destinationReady || preview.valid === 0 || unresolved.length > 0 || invalidChoices.length > 0 || Boolean(preview.errors && !validOnly)" @click="commit">导入词条</button></div>
       <p v-else class="muted">完成文件校验后，在这里确认导入目标。</p>
     </fieldset>
-    <div class="pending-area"><button class="text-button" :disabled="busy || restartRequired || demo" @click="findPending">检查未完成导入</button><div v-if="pendingImports.length"><p>继续时将重新核对文件和词库，冲突选择不会自动恢复。</p><button v-for="task in pendingImports" :key="task.task_id" :disabled="busy" @click="resumeImport(task.task_id)">{{ task.task_id }} · {{ task.valid }} 条有效 · 重新核对</button></div></div>
+
     </section></Transition>
     <Transition name="section"><section v-show="section === 'export'" class="data-section export-section" aria-label="导出词条">
       <div class="section-heading"><div><h2>导出词条</h2><p>把单词保存为文件，方便整理、打印或分享。</p></div></div>
@@ -378,7 +369,6 @@ onBeforeUnmount(() => { unlisten?.(); unlistenClose?.(); });
 .data-decision .form-actions { position: static; flex-wrap: wrap; }
 .commit-bar { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 18px; padding-top: 18px; border-top: 1px solid #e4ebe5; }
 .commit-bar button { flex-shrink: 0; }
-.pending-area, .export-actions { margin-top: 12px; }
 .data-progress { display: flex; align-items: center; gap: 16px; padding: 10px 14px; background: #e8f0e3; }
 .secondary-button { border: 1px solid #b9cec1; background: #fff; color: #31594e; }
 [role=alert] { color: #a0342c; }
